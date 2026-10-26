@@ -361,7 +361,7 @@ export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: Less
       } else if (typeof res === "string") {
         near.textContent = "🟡 " + res;
         mascot.react("near", "think", false);
-        mascot.say(res, 5000);
+        mascot.say(res);
       } else {
         near.textContent = "";
       }

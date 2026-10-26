@@ -129,6 +129,9 @@ export class Mascot {
   private moodTimer = 0;
   private sleepTimer = 0;
   private typeTimer = 0;
+  private hideTimer = 0;
+  /** До этого момента тык не перебивает текущую реплику (чтобы успеть дочитать). */
+  private readUntil = 0;
   private alive = true;
 
   constructor(opts: { size?: "lg" | "md" | "sm"; bubble?: boolean; greet?: boolean } = {}) {
@@ -147,6 +150,7 @@ export class Mascot {
   poke(): void {
     this.resetSleep();
     this.setMood(pick<Mood>(["smug", "angry", "think", "happy"]), 1800);
+    if (Date.now() < this.readUntil) return; // реплика ещё читается — только мимика
     this.say(pick(PHRASES.poke));
   }
 
@@ -164,7 +168,8 @@ export class Mascot {
     }
   }
 
-  say(text: string, ms = 4200): void {
+  /** ms: 0 — не прятать; не задано — по длине текста (~15 символов в секунду + 2 с, минимум 3.5 с). */
+  say(text: string, ms?: number): void {
     if (!this.bubble || !this.alive) return;
     const span = this.bubble.querySelector(".bubble-text")!;
     this.bubble.classList.remove("show");
@@ -178,10 +183,11 @@ export class Mascot {
       span.textContent = text.slice(0, i);
       if (i >= text.length) clearInterval(this.typeTimer);
     }, 22);
-    if (ms > 0) {
-      const t = window.setTimeout(() => this.bubble?.classList.remove("show"), ms);
-      this.timers.push(t);
-    }
+    const show = ms ?? Math.max(3500, 2000 + text.length * 65);
+    // старый таймер скрытия больше не прячет новую реплику
+    clearTimeout(this.hideTimer);
+    this.readUntil = Date.now() + Math.min(show, 1200 + text.length * 50);
+    if (show > 0) this.hideTimer = window.setTimeout(() => this.bubble?.classList.remove("show"), show);
   }
 
   /** Реакция на событие: настроение + фраза. */
@@ -230,5 +236,6 @@ export class Mascot {
     clearTimeout(this.moodTimer);
     clearTimeout(this.sleepTimer);
     clearInterval(this.typeTimer);
+    clearTimeout(this.hideTimer);
   }
 }
