@@ -1,0 +1,110 @@
+/* Палыч: размеры, пузырь с репликой, настроения и «жизнь» */
+.palych-wrap { position: relative; display: flex; align-items: flex-end; gap: 10px; }
+.palych-box { flex: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.palych-lg .palych-box { width: 150px; }
+.palych-md .palych-box { width: 96px; }
+.palych-sm .palych-box { width: 64px; }
+.palych { width: 100%; height: auto; display: block; overflow: visible; }
+
+.bubble {
+  position: relative; align-self: center; flex: 1; min-width: 0;
+  background: var(--surface2); color: var(--text); border: 2px solid var(--border);
+  border-radius: 16px; padding: 10px 12px; font-weight: 700; font-size: 15px; line-height: 1.3;
+  opacity: 0; transform: translateY(6px) scale(.96); transform-origin: left bottom;
+  transition: opacity .2s, transform .25s cubic-bezier(.3, 1.6, .5, 1);
+  min-height: 1.3em;
+}
+.bubble::before {
+  content: ""; position: absolute; left: -9px; bottom: 16px; width: 14px; height: 14px;
+  background: var(--surface2); border-left: 2px solid var(--border); border-bottom: 2px solid var(--border);
+  transform: rotate(45deg);
+}
+.bubble.show { opacity: 1; transform: none; }
+.palych-sm .bubble { font-size: 14px; padding: 8px 10px; }
+
+/* части рисунка */
+.palych .p-body { transform-box: view-box; transform-origin: 120px 240px; animation: p-breathe 3.4s ease-in-out infinite; }
+.palych .p-head { transform-box: view-box; transform-origin: 120px 150px; animation: p-bob 5s ease-in-out infinite; transition: transform .3s; }
+.palych .p-arm-l { transform-box: view-box; transform-origin: 66px 164px; transition: transform .5s cubic-bezier(.4, 1.4, .5, 1); }
+.palych .p-arm-r { transform-box: view-box; transform-origin: 176px 164px; transition: transform .5s cubic-bezier(.4, 1.4, .5, 1); }
+.palych .p-eye { transform-box: fill-box; transform-origin: center; transition: transform .09s; }
+.palych .p-pupil { transition: transform .35s; }
+.palych .p-brow { transform-box: fill-box; transform-origin: center; transition: transform .25s; }
+.palych .p-red { transition: opacity .3s; }
+.palych .mo { display: none; }
+.palych .p-vein, .palych .p-sweat, .palych .p-earsteam, .palych .p-zzz { opacity: 0; transition: opacity .2s; }
+.palych .p-tufts path { transform-box: fill-box; transform-origin: bottom; transition: transform .25s; }
+
+/* пар над кружкой и дым */
+.palych .p-steam path { opacity: 0; animation: p-steam 2.6s ease-in-out infinite; }
+.palych .p-steam .s2 { animation-delay: .8s; }
+.palych .p-steam .s3 { animation-delay: 1.6s; }
+.palych .p-smoke path { opacity: 0; animation: p-smoke 3.6s ease-in-out infinite; }
+.palych .p-smoke .k2 { animation-delay: 1.8s; }
+.palych .p-tip { animation: p-tip 1.8s ease-in-out infinite; }
+
+@keyframes p-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.012, 1.03); } }
+@keyframes p-bob { 0%, 100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg) translateY(1px); } }
+@keyframes p-steam { 0% { opacity: 0; transform: translateY(4px); } 30% { opacity: .75; } 100% { opacity: 0; transform: translateY(-16px); } }
+@keyframes p-smoke { 0% { opacity: 0; transform: translate(0, 4px) scale(.8); } 25% { opacity: .7; } 100% { opacity: 0; transform: translate(-8px, -30px) scale(1.4); } }
+@keyframes p-tip { 0%, 100% { fill: #ff5a1f; } 50% { fill: #ffb347; } }
+
+/* «жизнь» */
+.palych.blink .p-eye { transform: scaleY(.1); }
+.palych.look-l .p-pupil { transform: translate(-3px, 1px); }
+.palych.look-r .p-pupil { transform: translate(3px, 1px); }
+.palych.sip .p-arm-l { transform: rotate(-24deg) translate(6px, -6px); }
+.palych.sip .p-head { animation: none; transform: rotate(-4deg); }
+.palych.puff .p-arm-r { transform: rotate(-10deg); }
+.palych.puff .p-smoke path { animation-duration: 1.4s; }
+
+/* настроения */
+.palych.m-idle .mo-idle, .palych.m-sleep .mo-idle, .palych.m-think .mo-idle { display: block; }
+
+.palych.m-happy .mo-happy { display: block; }
+.palych.m-happy .p-brow { transform: translateY(-4px); }
+.palych.m-happy .p-arm-l { transform: rotate(-30deg) translate(4px, -10px); }
+.palych.m-happy.pulse { animation: p-jump .55s cubic-bezier(.3, 1.6, .5, 1); }
+
+.palych.m-angry .mo-angry { display: block; }
+.palych.m-angry .p-brow-l { transform: rotate(16deg) translateY(3px); }
+.palych.m-angry .p-brow-r { transform: rotate(-16deg) translateY(3px); }
+.palych.m-angry .p-red { opacity: .28; }
+.palych.m-angry .p-vein { opacity: 1; }
+.palych.m-angry .p-earsteam { opacity: 1; animation: p-earsteam .8s ease-out infinite; }
+.palych.m-angry.pulse { animation: p-shake .45s; }
+
+.palych.m-shock .mo-shock { display: block; }
+.palych.m-shock .p-eye { transform: scale(1.25); }
+.palych.m-shock .p-pupil { transform: scale(.6); transform-box: fill-box; transform-origin: center; }
+.palych.m-shock .p-brow { transform: translateY(-7px); }
+.palych.m-shock .p-sweat { opacity: 1; animation: p-drip 1.2s ease-in infinite; }
+.palych.m-shock .p-tufts path { transform: scaleY(1.35); }
+.palych.m-shock .p-arm-r { transform: rotate(-22deg); }
+.palych.m-shock.pulse { animation: p-jitter .12s linear 8; }
+
+.palych.m-think .p-pupil { transform: translate(3px, -3px); }
+.palych.m-think .p-brow-r { transform: translateY(-5px) rotate(-6deg); }
+.palych.m-think .mo-idle { transform: translateX(3px); }
+
+.palych.m-smug .mo-smug { display: block; }
+.palych.m-smug .p-brow-l { transform: translateY(-5px) rotate(-6deg); }
+.palych.m-smug .p-eye { transform: scaleY(.7); }
+
+.palych.m-sleep .p-eye { transform: scaleY(.12); }
+.palych.m-sleep .p-head { animation: none; transform: rotate(6deg) translateY(4px); }
+.palych.m-sleep .p-zzz { opacity: 1; }
+.palych.m-sleep .p-zzz text { animation: p-zzz 2.4s ease-in-out infinite; }
+.palych.m-sleep .p-zzz .z2 { animation-delay: .5s; }
+.palych.m-sleep .p-zzz .z3 { animation-delay: 1s; }
+
+@keyframes p-jump { 0%, 100% { transform: none; } 40% { transform: translateY(-12px); } }
+@keyframes p-shake { 0%, 100% { transform: none; } 20% { transform: translateX(-5px) rotate(-2deg); } 40% { transform: translateX(5px) rotate(2deg); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
+@keyframes p-jitter { 0% { transform: translate(1px, -1px); } 50% { transform: translate(-1px, 1px); } 100% { transform: translate(1px, 1px); } }
+@keyframes p-drip { 0% { transform: translateY(0); } 100% { transform: translateY(14px); opacity: 0; } }
+@keyframes p-earsteam { 0% { transform: translateY(4px) scale(.6); opacity: .9; } 100% { transform: translateY(-8px) scale(1.3); opacity: 0; } }
+@keyframes p-zzz { 0%, 100% { transform: translateY(0); opacity: .3; } 50% { transform: translateY(-6px); opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .palych *, .palych { animation: none !important; }
+}
