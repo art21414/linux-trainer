@@ -29,32 +29,29 @@ export function palychSvg(): string {
     <path class="tee ol" d="M101,146 C108,160 132,160 139,146 L150,190 C164,226 166,266 150,300 L90,300 C74,266 76,226 90,190 Z"/>
     <g clip-path="url(#${u}-tee)">
       <path class="tees" d="M90,236 C96,262 112,274 124,276 C138,276 154,262 160,236 C162,262 150,292 120,296 C92,292 80,262 90,236 Z" opacity=".75"/>
-      <rect x="70" y="228" width="100" height="72" fill="url(#${u}-d)" opacity=".28"/>
+      <rect x="70" y="236" width="100" height="64" fill="url(#${u}-d)" opacity=".16"/>
       <path class="tees-s" d="M88,206 q10,6 18,2 M152,208 q-10,6 -18,2 M92,238 q8,4 14,0 M148,240 q-8,4 -14,0" fill="none" stroke-width="1.6" stroke-linecap="round"/>
       <circle cx="140" cy="262" r="8" fill="#7b5233" opacity=".5"/>
       <circle cx="140" cy="262" r="8" fill="none" stroke="#5a3a22" stroke-width="1.4" opacity=".7"/>
-      <path id="${u}-arc" d="M90,208 Q120,224 150,208" fill="none"/>
-      <text class="tee-text" font-size="21" text-anchor="middle"><textPath href="#${u}-arc" startOffset="50%">RTFM</textPath></text>
+      <path id="${u}-arc" d="M88,212 Q120,222 152,212" fill="none"/>
+      <text class="tee-text" font-size="20" text-anchor="middle"><textPath href="#${u}-arc" startOffset="50%">RTFM</textPath></text>
     </g>
     <path class="ol" d="M101,146 C108,160 132,160 139,146" fill="none"/>
     <path class="tees-s" d="M104,149 C110,160 130,160 136,149" fill="none" stroke-width="3" stroke-linecap="round"/>
-    <!-- пуговица на нитке -->
-    <circle cx="150" cy="176" r="4.5" class="cdh ol"/><path class="ink-s" d="M148.5,175 h3 M150,173.5 v3" stroke-width="1" fill="none"/>
     <!-- карман с отвёрткой и ручкой -->
     <path class="cds ol" d="M160,244 L186,244 L184,278 L162,278 Z"/>
     <path class="cdh-s" d="M162,248 H184" stroke-width="1.5" fill="none"/>
     <rect x="165" y="222" width="7" height="22" rx="2" class="acc ol"/>
     <path class="ol" d="M168.5,222 V214" stroke-width="2" fill="none"/>
     <rect x="175" y="228" width="3" height="16" class="pen ol" stroke-width="1.2"/>
-    <!-- шнурок и бейдж -->
-    <path class="ol" d="M106,150 L116,256 M134,150 L124,256" stroke-width="6.5" fill="none"/>
-    <path class="lan" d="M106,150 L116,256 M134,150 L124,256" stroke-width="3.5" fill="none"/>
-    <g class="p-badge">
-      <rect x="105" y="254" width="30" height="40" rx="2" class="badge ol"/>
-      <rect x="107" y="256" width="26" height="9" class="acc"/>
-      <rect x="110" y="269" width="12" height="14" class="sk ol" stroke-width="1.2"/>
-      <path class="ink-s" d="M125,270 h6 M125,275 h6 M125,280 h4 M110,288 h20" stroke-width="1.6" fill="none"/>
-      <text x="120" y="263.5" font-size="7" font-weight="700" text-anchor="middle" class="pk-mono ink-f">UID 0</text>
+    <!-- бейдж-прищепка на правой поле -->
+    <g class="p-badge" transform="translate(10 8) rotate(7 160 200)">
+      <rect x="158" y="176" width="5" height="8" rx="1" class="ink-f"/>
+      <rect x="148" y="182" width="26" height="36" rx="2" class="badge ol" stroke-width="2"/>
+      <rect x="150" y="184" width="22" height="8" class="acc"/>
+      <text x="161" y="190.5" font-size="6.5" font-weight="600" text-anchor="middle" class="pk-mono ink-f">UID 0</text>
+      <rect x="152" y="195" width="10" height="12" class="sk ol" stroke-width="1.2"/>
+      <path class="ink-s" d="M165,197 h4 M165,201 h4 M165,205 h3 M152,212 h18" stroke-width="1.4" fill="none"/>
     </g>
     <!-- воротник кардигана -->
     <path class="cd ol" d="M98,146 C92,142 86,140 82,146 L96,176 L102,150 Z"/>
@@ -73,7 +70,7 @@ export function palychSvg(): string {
     <path class="cd-s" d="M172,168 Q214,186 206,232 Q204,204 199,180" stroke-width="25" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     <ellipse cx="206" cy="212" rx="7" ry="9" class="leather ol" stroke-width="1.4" transform="rotate(8 206 212)"/>
     <path class="cdh-s" d="M184,172 q16,8 20,22" stroke-width="2" fill="none" opacity=".6" stroke-linecap="round"/>
-    <path class="cds ol" d="M190,170 L208,176 L206,186 L188,180 Z" stroke-width="1.6"/>
+    <path class="ink-s" d="M190,176 Q198,184 206,182" stroke-width="2.4" fill="none" stroke-linecap="round"/>
     <g class="p-smoke" fill="none" stroke-linecap="round">
       <path class="k1" d="M221,122 q7,-9 0,-18 q-7,-9 0,-18"/>
       <path class="k2" d="M223,120 q-7,-9 0,-18 q7,-9 0,-18"/>
@@ -125,7 +122,7 @@ export function palychSvg(): string {
     <g class="p-eyes">
       <g class="p-eye p-eye-l">
         <ellipse cx="103" cy="82" rx="8" ry="7" class="eye"/>
-        <circle class="p-pupil" cx="103" cy="82.5" r="3.2" class2="x" fill="#1d1712"/><circle class="p-pupil" cx="104.5" cy="81" r="1" fill="#fff"/>
+        <circle class="p-pupil" cx="103" cy="82.5" r="3.2" fill="#1d1712"/><circle class="p-pupil" cx="104.5" cy="81" r="1" fill="#fff"/>
         <g clip-path="url(#${u}-el)"><g class="p-lid"><rect x="93" y="74" width="20" height="16" class="sk"/><path class="ol" d="M93,90 H113" stroke-width="1.8" fill="none"/></g></g>
       </g>
       <g class="p-eye p-eye-r">
@@ -195,21 +192,21 @@ export function palychSvg(): string {
     <path class="cd-s" d="M66,168 Q38,196 44,238 Q48,254 64,250" stroke-width="25" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     <ellipse cx="44" cy="222" rx="7" ry="9" class="leather ol" stroke-width="1.4" transform="rotate(-8 44 222)"/>
     <path class="cdh-s" d="M58,176 q-14,12 -14,30" stroke-width="2" fill="none" opacity=".6" stroke-linecap="round"/>
-    <path class="cds ol" d="M52,246 L66,258 L72,248 L58,238 Z" stroke-width="1.6"/>
     <g class="p-mug">
       <path class="mugh ol" d="M70,232 C56,230 56,254 70,252" fill="none" stroke-width="5" stroke-linecap="round"/>
       <path class="mug" d="M70,232 C58,231 58,252 70,251" fill="none" stroke-width="2.2" stroke-linecap="round"/>
       <rect x="68" y="218" width="32" height="40" rx="4" class="mug ol"/>
       <rect x="70" y="248" width="28" height="8" rx="2" fill="#000" opacity=".12"/>
-      <rect x="73" y="228" width="22" height="16" rx="1.5" class="screen ol" stroke-width="1.4"/>
-      <text x="84" y="240" font-size="11" font-weight="700" text-anchor="middle" class="pk-mono" fill="#f2a03d">&gt;_</text>
+      <rect x="77" y="228" width="19" height="16" rx="1.5" class="screen ol" stroke-width="1.4"/>
+      <text x="86.5" y="240" font-size="10" font-weight="700" text-anchor="middle" class="pk-mono" fill="#f2a03d">&gt;_</text>
       <ellipse cx="84" cy="218" rx="16" ry="3.6" class="coffee ol" stroke-width="1.6"/>
       <g class="p-steam" fill="none" stroke-linecap="round">
         <path class="s1" d="M76,212 q-4,-6 0,-12 q4,-6 0,-12"/><path class="s2" d="M84,212 q-4,-6 0,-12 q4,-6 0,-12"/><path class="s3" d="M92,212 q-4,-6 0,-12 q4,-6 0,-12"/>
       </g>
     </g>
-    <path class="ol sk" d="M66,238 C60,232 62,226 70,226 C74,226 76,230 74,236 C74,244 70,252 64,250 C60,248 62,242 66,238 Z" stroke-width="2"/>
-    <path class="sk ol" d="M74,230 C78,229 80,234 76,236 Z M74,238 C78,237 80,242 76,244 Z M73,246 C77,245 79,250 75,252 Z" stroke-width="1.6"/>
+    <path class="sk ol" d="M58,240 C55,232 60,225 69,225 L74,227 C77,233 77,244 74,252 C69,258 60,256 58,240 Z" stroke-width="2"/>
+    <path class="ol" d="M64,234 H75 M64,241 H76 M65,248 H75" fill="none" stroke-width="1.6" stroke-linecap="round"/>
+    <path class="sks-s" d="M60,244 q2,8 8,10" stroke-width="2" fill="none" stroke-linecap="round" opacity=".7"/>
   </g>
 
   <!-- ===== ФЕЙСПАЛМ: рука к лицу ===== -->

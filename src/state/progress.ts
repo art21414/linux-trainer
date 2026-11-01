@@ -134,6 +134,13 @@ export function completeSet(topicId: string, setId: string, accuracy: number, xp
   return res;
 }
 
+/** Повторение ошибок: только XP и стрик (в «наборы» не пишется). */
+export function completeReview(xp: number): { streakUp: boolean } {
+  const res = addXp(xp);
+  save();
+  return res;
+}
+
 export function noteMistake(topicId: string, exId: string): void {
   const k = `${topicId}/${exId}`;
   const m = progress.mistakes[k];

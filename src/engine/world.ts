@@ -4,6 +4,8 @@
 import { InMemoryFs } from "just-bash";
 import type { IFileSystem } from "just-bash";
 import { normalize, dirname } from "./path";
+import { InodeTable } from "./inodes";
+import { ProcTable } from "./procs";
 
 export interface User {
   name: string;
@@ -75,6 +77,14 @@ export class World {
   pendingSu: PendingSu | null = null;
   /** Последняя «нереализованная» команда (для журнала). */
   unsupported: string[] = [];
+  /** inode и жёсткие ссылки (см. inodes.ts). */
+  readonly inodes = new InodeTable();
+  /** Таблица процессов (см. procs.ts). */
+  readonly procs: ProcTable = new ProcTable(this);
+  /** PID текущего shell-процесса (ставит Shell). */
+  shellPid = 0;
+  /** Журнал вывода команд по порядку: для правильного чередования stdout/stderr (см. streams.ts). */
+  trace: { out: string; err: string; chunks?: ["o" | "e", string][] }[] = [];
 
   constructor() {
     this.fs = this.makeGuardedFs();
@@ -246,10 +256,12 @@ export class World {
 
   async setMode(path: string, mode: number): Promise<void> {
     await this.base.chmod(normalize(path), mode);
+    for (const n of this.inodes.names(path)) if (n !== normalize(path)) await this.base.chmod(n, mode);
   }
 
   setOwner(path: string, uid: number, gid: number): void {
     this.owners.set(normalize(path), { uid, gid });
+    for (const n of this.inodes.names(path)) this.owners.set(n, { uid, gid });
   }
 
   /** Все пути внутри каталога (включая сам каталог). */
@@ -347,12 +359,21 @@ export class World {
       const setgid = !!di && (di.mode & 0o2000) !== 0;
       const gid = setgid && di ? di.gid : w.cur.gid;
       w.owners.set(p, { uid: w.cur.uid, gid });
+      w.inodes.create(p);
       if (kind === "file") await base.chmod(p, 0o666 & ~w.umask);
       if (kind === "dir") await base.chmod(p, (0o777 & ~w.umask) | (setgid ? 0o2000 : 0));
     };
     const dropTree = (p: string) => {
       const prefix = p === "/" ? "/" : p + "/";
       for (const k of [...w.owners.keys()]) if (k === p || k.startsWith(prefix)) w.owners.delete(k);
+      w.inodes.forgetTree(p);
+    };
+    // жёсткие ссылки в just-bash — снимки; после записи через одно имя обновляем остальные имена того же inode
+    const syncLinks = async (p: string) => {
+      const others = w.inodes.names(p).filter((x) => x !== p);
+      if (!others.length) return;
+      const buf = await base.readFileBuffer(p);
+      for (const o of others) if (await base.exists(o)) await base.writeFile(o, buf);
     };
 
     const hooks: Record<string, (...a: any[]) => Promise<unknown>> = {
@@ -374,6 +395,7 @@ export class World {
         await guardWriteOrCreate(n);
         await base.writeFile(p, c as never, o as never);
         if (!existed) await onCreate(n, "file");
+        else await syncLinks(n);
       },
       async appendFile(p: string, c: unknown, o?: unknown) {
         const n = normalize(p);
@@ -381,6 +403,7 @@ export class World {
         await guardWriteOrCreate(n);
         await base.appendFile(p, c as never, o as never);
         if (!existed) await onCreate(n, "file");
+        else await syncLinks(n);
       },
       async createExclusive(p: string, o: { mode: number; directory?: boolean }) {
         const n = normalize(p);
@@ -427,7 +450,10 @@ export class World {
         const before = new Set(base.getAllPaths());
         await base.cp(src, dest, o as never);
         for (const x of base.getAllPaths()) {
-          if (!before.has(x) || x === d) w.owners.set(x, { uid: w.cur.uid, gid: w.cur.gid });
+          if (!before.has(x) || x === d) {
+            w.owners.set(x, { uid: w.cur.uid, gid: w.cur.gid });
+            w.inodes.create(x);
+          }
         }
       },
       async mv(src: string, dest: string) {
@@ -443,13 +469,15 @@ export class World {
         await base.mv(src, dest);
         for (const [k] of moved) w.owners.delete(k);
         const finalDest = (await base.exists(d)) ? d : normalize(dest);
+        w.inodes.rename(s, finalDest);
         for (const [k, v] of moved) w.owners.set(finalDest + k.slice(s.length), v);
       },
       async chmod(p: string, mode: number) {
         const n = normalize(p);
         const inf = await w.info(n, true);
         if (inf && !isRoot() && inf.uid !== w.cur.uid) throw new FsError("EPERM", "chmod", n);
-        return base.chmod(p, mode);
+        await base.chmod(p, mode);
+        for (const o of w.inodes.names(n)) if (o !== n) await base.chmod(o, mode);
       },
       async symlink(target: string, link: string) {
         const n = normalize(link);
@@ -463,6 +491,7 @@ export class World {
         await base.link(existing, np);
         const o = w.owner(existing);
         w.owners.set(n, o);
+        w.inodes.link(normalize(existing), n);
       },
       async utimes(p: string, a: Date, m: Date) {
         const n = normalize(p);

@@ -2,6 +2,8 @@ import { ALL_TOPICS } from "../content/topics";
 import { currentStreak, exportProgress, importProgress, progress, resetProgress, save } from "../state/progress";
 import { confirmModal, h, toast } from "./dom";
 import { navBar, topBar } from "./chrome";
+import { icon } from "./icons";
+import type { IconName } from "./icons";
 
 async function copy(text: string): Promise<boolean> {
   try {
@@ -19,9 +21,10 @@ function download(name: string, text: string): void {
 }
 
 export function renderProfile(root: HTMLElement, go: (hash: string) => void, rerender: () => void): () => void {
+  const sets = Object.keys(progress.sets).filter((k) => !k.endsWith("/exam")).length;
   const done = ALL_TOPICS.filter((t) => progress.exams[t.id]).length;
-  const stat = (icon: string, value: string, label: string) =>
-    h("div", { class: "big-stat" }, h("span", {}, icon), h("div", {}, h("b", {}, value), h("small", {}, label)));
+  const stat = (ico: IconName, value: string, label: string) =>
+    h("div", { class: "big-stat" }, h("span", { class: "big-stat__ico" }, icon(ico, { size: 24 })), h("div", {}, h("b", {}, value), h("small", {}, label)));
 
   const sw = h("button", { class: `switch ${progress.settings.sound ? "on" : ""}`, "aria-label": "Звук" });
   sw.onclick = () => {
@@ -53,16 +56,17 @@ export function renderProfile(root: HTMLElement, go: (hash: string) => void, rer
       h(
         "div",
         { class: "grid2" },
-        stat("⚡", String(progress.xp), "опыт"),
-        stat("🔥", String(currentStreak()), "дней подряд"),
-        stat("⭐", `${done}/${ALL_TOPICS.length}`, "зачётов"),
-        stat("🧠", String(Object.keys(progress.mistakes).length), "заданий на повтор"),
+        stat("bolt", String(progress.xp), "опыт"),
+        stat("flame", String(currentStreak()), "дней подряд"),
+        stat("terminal", String(sets), "наборов пройдено"),
+        stat("exam", `${done}/${ALL_TOPICS.length}`, "тем закрыто зачётом"),
+        stat("refresh", String(Object.keys(progress.mistakes).length), "заданий на повтор"),
       ),
-      h("div", { class: "card" }, h("div", { class: "toggle" }, h("span", {}, "🔊 Звуки"), sw)),
+      h("div", { class: "card" }, h("div", { class: "toggle" }, h("span", {}, "Звуки"), sw)),
       h(
         "div",
         { class: "card" },
-        h("h3", {}, "📓 Журнал неизвестных команд"),
+        h("h3", {}, "Журнал неизвестных команд"),
         h("p", {}, "Команды, которых тренажёр пока не знает. Скопируй и пришли разработчику — добавим."),
         h("div", { class: "log" }, unknownText),
         h(
@@ -93,7 +97,7 @@ export function renderProfile(root: HTMLElement, go: (hash: string) => void, rer
       h(
         "div",
         { class: "card" },
-        h("h3", {}, "💾 Прогресс"),
+        h("h3", {}, "Прогресс"),
         h("p", {}, "Хранится только на этом телефоне. Сохрани файл, чтобы перенести на другое устройство."),
         h(
           "div",
@@ -106,10 +110,9 @@ export function renderProfile(root: HTMLElement, go: (hash: string) => void, rer
       h(
         "button",
         {
-          class: "btn ghost small",
-          style: { color: "var(--red)" },
+          class: "btn ghost small btn--danger",
           onclick: async () => {
-            if (await confirmModal("Сбросить прогресс?", "XP, стрик и уроки обнулятся. Палыч сделает вид, что тебя не знает.", "Сбросить")) {
+            if (await confirmModal("Сбросить прогресс?", "XP, стрик, наборы и зачёты обнулятся. Палыч сделает вид, что тебя не знает.", "Сбросить")) {
               resetProgress();
               rerender();
             }
