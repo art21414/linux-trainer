@@ -313,6 +313,7 @@ code, pre, .mono { font-family: var(--mono); }
 .theory-md pre.codeblock code { background: none; padding: 0; font-size: inherit; }
 .theory-md .table-wrap { max-width: 100%; overflow-x: auto; margin: 0 0 var(--s-3); -webkit-overflow-scrolling: touch; }
 .theory-md table { border-collapse: collapse; font-size: var(--fs-sm); min-width: 100%; }
+.theory-md td { min-width: 9ch; }
 .theory-md th, .theory-md td { border: var(--bw-thin) solid var(--c-line); padding: var(--s-2); text-align: left; vertical-align: top; }
 .theory-md th { background: var(--c-surface-2); white-space: nowrap; }
 .theory-md td code, .theory-md th code { white-space: nowrap; }
