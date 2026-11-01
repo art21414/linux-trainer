@@ -1,5 +1,5 @@
 import { PHRASES, pick } from "../content/palych";
-import { completeLesson, currentStreak } from "../state/progress";
+import { completeSet, currentStreak } from "../state/progress";
 import { h } from "./dom";
 import type { LessonOutcome } from "./lesson";
 import { Mascot } from "./mascot";
@@ -32,7 +32,7 @@ function confetti(): HTMLElement {
 
 export function renderFinish(root: HTMLElement, o: LessonOutcome, onContinue: () => void): () => void {
   const xp = lessonXp(o);
-  const { streakUp } = completeLesson(o.lesson.id, o.accuracy, xp);
+  const { streakUp } = completeSet(o.topicId, o.set.id, o.accuracy, xp);
   const mascot = new Mascot({ size: "lg", bubble: true });
   play("finish");
   setTimeout(() => {
@@ -55,7 +55,7 @@ export function renderFinish(root: HTMLElement, o: LessonOutcome, onContinue: ()
         "div",
         { class: "finish" },
         mascot.el,
-        h("h1", {}, o.mistakes === 0 ? "Идеально!" : "Урок пройден!"),
+        h("h1", {}, o.mistakes === 0 ? "Идеально!" : o.set.id === "exam" ? "Зачёт не сдан чисто" : "Набор пройден!"),
         streakUp ? h("div", { class: "chip streak", style: { fontSize: "20px" } }, `🔥 Стрик: ${currentStreak()} ${days(currentStreak())}`) : null,
         h(
           "div",

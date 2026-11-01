@@ -31,6 +31,57 @@
 - У каждого задания стабильный `id` (не менять после публикации — на нём прогресс и повторение)
   и `theory` — якорь подтемы, к которой относится (кнопка «Теория» откроет её).
 
+### Образец `index.ts` (см. рабочий пример `src/content/topics/02-permissions/`)
+```ts
+import type { Topic } from "../../types";
+import theoryMd from "./theory.md?raw";   // типы для ?raw уже есть
+
+export const permissions: Topic = {
+  id: "perm", n: 2, title: "Права доступа", level: "base",
+  summary: "rwx, chmod, chown, umask",
+  theory: theoryMd,
+  sets: [{ id: "1", title: "Читаем и меняем права", exercises: [
+    { id: "perm-1-01", type: "terminal", theory: "chmod",   // якорь из theory.md
+      prompt: "Сделай **~/run.sh** исполняемым для владельца.", user: "alice",
+      setup: async (w) => { const a = w.user("alice")!;
+        await w.write("/home/alice/run.sh", "#!/bin/bash\n", 0o644, a.uid, a.gid); },
+      check: async ({ world }) => !!((await world.info("/home/alice/run.sh"))!.mode & 0o100),
+      hint: "chmod и буква x.", solution: "chmod u+x ~/run.sh",
+      accept: ["chmod 744 ~/run.sh"], reject: ["chmod 666 ~/run.sh"],
+      explain: "x у владельца — `u+x`." },
+    { id: "perm-1-02", type: "choice", kind: "predict", theory: "chmod",
+      prompt: "Права `f` и `d`?", code: "$ umask 027\n$ touch f; mkdir d",
+      options: ["f: 640, d: 750", "f: 750, d: 750", "f: 644, d: 755"], answer: 0,
+      explain: "666-027=640, 777-027=750." },
+  ] }],
+  exam: { id: "exam", title: "Зачёт", exercises: [/* 4–6 заданий, id вида perm-exam-01 */] },
+};
+```
+Регистрация: добавить тему в `SECTIONS` в `src/content/topics/index.ts`. Id задания — глобально уникальный
+(`<тема>-<набор>-<NN>`), `check` возвращает `true` / `false` / строку-подсказку «почти».
+
+### Образец `theory.md`
+````md
+# Права доступа
+
+## Читаем rwx {#rwx}
+Первый символ — **тип**, дальше три тройки: u, g, o.
+
+| Бит | Файл | Каталог |
+|---|---|---|
+| `r` (4) | читать | видеть имена |
+
+> **Ловушка.** Удалить файл можно без прав на него: нужно `w` на каталог.
+> **На практике.** root обходит `r` и `w`.
+
+```bash
+$ umask 027
+```
+````
+Поддерживается: абзацы, `**жирный**`, `` `код` ``, блоки ```` ``` ````, списки, таблицы, `> **Ловушка.**` /
+`> **На практике.**` / `> **Важно.**` (выноска получает класс по первому жирному слову), заголовки `###`.
+Заголовок `# …` в начале файла игнорируется; текст до первого `##` — введение (`intro`).
+
 ## 4. Задания
 Доли: **terminal ≥ 75 %**, choice ≤ 25 %. Плиток и «заполни пропуск из списка» нет.
 

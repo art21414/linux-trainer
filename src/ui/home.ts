@@ -1,21 +1,17 @@
-import { UNITS, ALL_LESSONS } from "../content/units";
-import { currentStreak, dailyXp, doneToday, progress } from "../state/progress";
+import { SECTIONS, ALL_TOPICS } from "../content/topics";
+import { continueTarget, doneToday, dailyXp, progress, topicProgress, topicStatus } from "../state/progress";
 import { h } from "./dom";
 import { Mascot } from "./mascot";
 import { navBar, topBar } from "./chrome";
 
-const ZIGZAG = [0, 44, 66, 44, 0, -44, -66, -44];
-
-export function isUnlocked(lessonId: string): boolean {
-  const i = ALL_LESSONS.findIndex((l) => l.id === lessonId);
-  return i === 0 || !!progress.lessons[ALL_LESSONS[i - 1]?.id];
-}
+// ВРЕМЕННЫЙ простой экран: список тем -> наборы. Полностью переделывается.
+const STATUS: Record<string, string> = { new: "", "in-progress": "в процессе", "closed-by-exam": "зачёт сдан", mastered: "освоена" };
 
 export function renderHome(root: HTMLElement, go: (hash: string) => void): () => void {
   const mascot = new Mascot({ size: "lg", greet: true });
   const goal = progress.settings.dailyGoal;
   const dxp = dailyXp();
-  const current = ALL_LESSONS.find((l) => !progress.lessons[l.id] && isUnlocked(l.id));
+  const cont = continueTarget(ALL_TOPICS);
 
   const scroll = h("div", { class: "scroll" });
   scroll.append(
@@ -28,56 +24,24 @@ export function renderHome(root: HTMLElement, go: (hash: string) => void): () =>
     ),
   );
 
-  let n = 0;
-  UNITS.forEach((u, ui) => {
-    const unitEl = h(
-      "div",
-      { class: "unit", style: { "--color": u.color, "--shade": u.shade } },
-      h("small", {}, `Раздел ${ui + 1}`),
-      h("h2", {}, u.title),
-      h("p", {}, u.subtitle),
-    );
-    const path = h("div", { class: "path", style: { "--color": u.color, "--shade": u.shade } });
-    for (const l of u.lessons) {
-      const done = !!progress.lessons[l.id];
-      const open = isUnlocked(l.id);
-      const isCur = current?.id === l.id;
-      const node = h(
-        "button",
-        {
-          class: `node ${done ? "done" : ""} ${open ? "" : "locked"} ${isCur ? "current" : ""}`,
-          "aria-label": l.title,
-          onclick: () => {
-            if (open) go(`#/lesson/${l.id}`);
-            else mascot.say("Не спеши. Сначала предыдущий урок.");
-          },
-        },
-        done ? "⭐" : open ? l.icon : "🔒",
-      );
-      const wrap = h(
-        "div",
-        { class: "node-wrap", style: { transform: `translateX(${ZIGZAG[n++ % ZIGZAG.length]}px)` } },
-        isCur ? h("div", { class: "start-tip" }, progress.lessons[l.id] ? "ЕЩЁ РАЗ" : "НАЧАТЬ") : null,
-        node,
-        h("div", { class: "node-label" }, l.title),
-      );
-      path.append(wrap);
+  if (cont) {
+    const t = ALL_TOPICS.find((x) => x.id === cont.topicId)!;
+    scroll.append(h("button", { class: "btn", onclick: () => go(`#/set/${t.id}/${cont.setId ?? "exam"}`) }, `Продолжить: ${t.title}`));
+  }
+  for (const sec of SECTIONS) {
+    scroll.append(h("h2", {}, sec.title));
+    for (const t of sec.topics) {
+      const pct = Math.round(topicProgress(t) * 100);
+      const row = h("div", { class: "topic-row" }, h("b", {}, `${t.n}. ${t.title}`), h("small", {}, ` ${t.summary} · ${pct}% ${STATUS[topicStatus(t)]}`));
+      const btns = h("div", { class: "row" });
+      for (const s of [...t.sets, t.exam]) {
+        const done = !!progress.sets[`${t.id}/${s.id}`];
+        btns.append(h("button", { class: "btn ghost small", onclick: () => go(`#/set/${t.id}/${s.id}`) }, `${done ? "✓ " : ""}${s.id === "exam" ? "Зачёт" : s.title}`));
+      }
+      scroll.append(row, btns);
     }
-    // стили CSS-переменных через setProperty (Object.assign не умеет --vars)
-    for (const el of [unitEl, path]) {
-      el.style.setProperty("--color", u.color);
-      el.style.setProperty("--shade", u.shade);
-    }
-    scroll.append(unitEl, path);
-  });
-  scroll.append(h("div", { class: "soon" }, "Дальше: процессы, systemd, сеть, диски…\nПалыч уже варит кофе ☕"));
+  }
 
   root.append(h("div", { class: "screen" }, topBar(), scroll, navBar("home", go)));
-  // прокрутить к текущему уроку
-  requestAnimationFrame(() => {
-    const cur = scroll.querySelector(".node.current");
-    if (cur && cur.getBoundingClientRect().top > window.innerHeight * 0.75) cur.scrollIntoView({ block: "center" });
-  });
-  void currentStreak;
   return () => mascot.destroy();
 }

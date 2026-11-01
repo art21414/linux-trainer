@@ -4,10 +4,21 @@ import "@fontsource/nunito/800.css";
 import "@fontsource/nunito/900.css";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/700.css";
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/cyrillic-400.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/ibm-plex-sans/cyrillic-600.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/cyrillic-400.css";
+import "@fontsource/ibm-plex-mono/latin-600.css";
+import "@fontsource/ibm-plex-mono/cyrillic-600.css";
+import "@fontsource/pixelify-sans/latin-600.css";
+import "@fontsource/pixelify-sans/cyrillic-600.css";
+import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/mascot.css";
-import { ALL_LESSONS } from "./content/units";
-import { renderHome, isUnlocked } from "./ui/home";
+import { topicById, setOf } from "./content/topics";
+import { renderHome } from "./ui/home";
 import { renderLesson } from "./ui/lesson";
 import type { LessonOutcome } from "./ui/lesson";
 import { renderFinish } from "./ui/finish";
@@ -36,11 +47,12 @@ function showFinish(o: LessonOutcome): void {
 
 function route(): void {
   const hash = location.hash || "#/";
-  const lessonMatch = /^#\/lesson\/(\w+)$/.exec(hash);
-  if (lessonMatch) {
-    const lesson = ALL_LESSONS.find((l) => l.id === lessonMatch[1]);
-    if (lesson && isUnlocked(lesson.id)) {
-      mount((root) => renderLesson(root, lesson, showFinish, () => go("#/")));
+  const setMatch = /^#\/set\/([\w-]+)\/([\w-]+)$/.exec(hash);
+  if (setMatch) {
+    const topic = topicById(setMatch[1]);
+    const set = topic && setOf(topic, setMatch[2]);
+    if (topic && set) {
+      mount((root) => renderLesson(root, topic.id, set, showFinish, () => go("#/")));
       return;
     }
   }

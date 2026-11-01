@@ -1,4 +1,4 @@
-import { ALL_LESSONS } from "../content/units";
+import { ALL_TOPICS } from "../content/topics";
 import { currentStreak, exportProgress, importProgress, progress, resetProgress, save } from "../state/progress";
 import { confirmModal, h, toast } from "./dom";
 import { navBar, topBar } from "./chrome";
@@ -19,7 +19,7 @@ function download(name: string, text: string): void {
 }
 
 export function renderProfile(root: HTMLElement, go: (hash: string) => void, rerender: () => void): () => void {
-  const done = ALL_LESSONS.filter((l) => progress.lessons[l.id]).length;
+  const done = ALL_TOPICS.filter((t) => progress.exams[t.id]).length;
   const stat = (icon: string, value: string, label: string) =>
     h("div", { class: "big-stat" }, h("span", {}, icon), h("div", {}, h("b", {}, value), h("small", {}, label)));
 
@@ -55,7 +55,7 @@ export function renderProfile(root: HTMLElement, go: (hash: string) => void, rer
         { class: "grid2" },
         stat("⚡", String(progress.xp), "опыт"),
         stat("🔥", String(currentStreak()), "дней подряд"),
-        stat("⭐", `${done}/${ALL_LESSONS.length}`, "уроков"),
+        stat("⭐", `${done}/${ALL_TOPICS.length}`, "зачётов"),
         stat("🧠", String(Object.keys(progress.mistakes).length), "заданий на повтор"),
       ),
       h("div", { class: "card" }, h("div", { class: "toggle" }, h("span", {}, "🔊 Звуки"), sw)),
