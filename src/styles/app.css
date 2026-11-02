@@ -9,7 +9,10 @@ code, pre, .mono { font-family: var(--f-mono); }
 h1, h2, h3, h4, h5 { font-weight: 600; line-height: var(--lh-tight); }
 [hidden] { display: none !important; }
 
-#app { height: 100dvh; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; position: relative; overflow: hidden; background: var(--c-bg); }
+/* Высоту задаёт src/ui/viewport.ts (--app-h = видимая область над экранной клавиатурой); без JS — 100dvh.
+   overflow: clip — содержимое не прокручивается даже программно (фокус поля иначе сдвигает #app и прячет панель). */
+html, body { overflow: hidden; }
+#app { height: var(--app-h, 100dvh); display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; position: relative; overflow: hidden; overflow: clip; background: var(--c-bg); top: var(--app-top, 0px); }
 .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; animation: screen-in var(--d-base) var(--ease) both; }
 @keyframes screen-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .scroll { flex: 1; overflow-y: auto; min-height: 0; -webkit-overflow-scrolling: touch; }
@@ -232,8 +235,11 @@ blockquote.callout.note > p:first-child > strong:first-child { background: var(-
 .sheet-body .answer { display: block; margin-top: var(--s-1); padding: var(--s-2) var(--s-3); font-family: var(--f-mono); font-size: var(--fs-sm); white-space: pre-wrap; color: var(--c-text); background: var(--c-term); border-left: var(--bw) solid var(--c-ok); }
 .sheet-body .explain { display: block; margin-top: var(--s-2); }
 
-/* задание в терминале */
-.ex.term-ex { flex: 1; min-height: 0; padding-bottom: var(--s-2); gap: var(--s-3); }
+/* задание в терминале.
+   Раскладка рассчитана на экранную клавиатуру: терминал (вывод + строка ввода + панель кнопок) всегда в видимой области,
+   а условие и подсказка при нехватке места ужимаются и прокручиваются сами. Крайний случай — прокрутка всей области. */
+.ex.term-ex { flex: 1; min-height: 0; padding-bottom: var(--s-2); gap: var(--s-3); overflow-y: auto; overscroll-behavior: contain; }
+.term-ex > * { flex: none; }
 .task-card { padding: var(--s-3) var(--s-4); background: var(--c-surface); border: var(--bw-thin) solid var(--c-line); border-left: 4px solid var(--c-accent); font-size: var(--fs-md); line-height: 1.4; }
 .task-card strong { font-weight: 600; }
 .task-card .near { display: block; margin-top: var(--s-2); color: var(--c-warn); font-family: var(--f-mono); font-size: var(--fs-xs); }
@@ -243,15 +249,42 @@ blockquote.callout.note > p:first-child > strong:first-child { background: var(-
 .hint-box code { color: var(--c-text); }
 .term-ex .palych-sm .palych-box { width: 56px; }
 .term-ex .bubble:not(.show) { display: none; }
-.term-ex .term { flex: 1; min-height: 200px; }
+/* условие и подсказка сжимаются первыми и прокручиваются (тени по краям показывают, что есть ещё текст) */
+.term-ex > .task-card, .term-ex > .hint-box {
+  flex: 0 1 auto; min-height: 5.5em; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  background:
+    linear-gradient(var(--c-surface) 30%, transparent) 0 0 / 100% 18px no-repeat local,
+    linear-gradient(transparent, var(--c-surface) 70%) 0 100% / 100% 18px no-repeat local,
+    linear-gradient(var(--c-line-strong), transparent) 0 0 / 100% 6px no-repeat scroll,
+    linear-gradient(transparent, var(--c-line-strong)) 0 100% / 100% 6px no-repeat scroll,
+    var(--c-surface);
+}
+.term-ex > .hint-box { min-height: 4.5em; }
+/* терминал забирает всё оставшееся, но не меньше: заголовок + 3 строки вывода + ввод + панель кнопок */
+.term-ex > .term { flex: 1 1 0; min-height: 184px; }
 @media (max-height: 600px) { .term-ex .palych-wrap, .term-ex .ex-kind { display: none; } }
+/* низкая область (клавиатура на небольшом телефоне): плотнее поля, без заголовка окна терминала */
+@media (max-height: 520px) {
+  .ex.term-ex { padding-top: var(--s-2); padding-bottom: var(--s-2); gap: var(--s-2); }
+  .term-ex > .task-card, .term-ex > .hint-box { padding-top: var(--s-2); padding-bottom: var(--s-2); }
+  .term-ex > .term { min-height: 140px; }
+  .footer { padding-top: var(--s-2); padding-bottom: calc(var(--s-2) + env(safe-area-inset-bottom)); }
+  .lesson-top { padding-top: 0; padding-bottom: 0; }
+  .x { height: 44px; }
+}
+@media (max-height: 380px) {
+  .term-ex > .task-card, .term-ex > .hint-box { min-height: 3.2em; }
+  .term-ex > .term { min-height: 124px; }
+  .term-ex .term-out { min-height: 36px; }
+  .footer .btn { min-height: 38px; }
+}
 
 /* ---------- терминал ---------- */
 .term { display: flex; flex-direction: column; background: var(--c-term); border: var(--bw) solid var(--c-line-strong); border-radius: var(--r-1); overflow: hidden; min-height: 0; box-shadow: var(--shadow-block); }
 .term-head { display: flex; align-items: center; gap: var(--s-2); padding: 0 var(--s-3); height: 28px; flex: none; background: var(--c-surface); border-bottom: var(--bw) solid var(--c-line); font-family: var(--f-mono); font-size: var(--fs-xs); color: var(--c-muted); }
 .term-head::before { content: ""; width: 8px; height: 8px; background: var(--c-accent); flex: none; }
 .term-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.term-out { flex: 1; overflow-y: auto; padding: var(--s-2) var(--s-2) var(--s-1); font-family: var(--f-mono); font-size: 12px; line-height: 1.5; color: var(--c-text); white-space: pre-wrap; overflow-wrap: anywhere; min-height: 0; background-image: var(--scanline); }
+.term-out { flex: 1; min-height: 54px; overflow-y: auto; padding: var(--s-2) var(--s-2) var(--s-1); font-family: var(--f-mono); font-size: 12px; line-height: 1.5; color: var(--c-text); white-space: pre-wrap; overflow-wrap: anywhere; background-image: var(--scanline); }
 .term-out .line { min-height: 1.5em; animation: line-in var(--d-fast) steps(3, end) both; }
 @keyframes line-in { from { opacity: 0; } }
 .term-out .cmd { color: var(--c-text); font-weight: 600; }
@@ -267,6 +300,13 @@ blockquote.callout.note > p:first-child > strong:first-child { background: var(-
 .keys button { flex: none; min-width: 44px; height: 44px; padding: 0 var(--s-3); background: var(--c-surface-2); color: var(--c-text); border: var(--bw-thin) solid var(--c-line-strong); box-shadow: 0 2px 0 var(--c-line-strong); font-family: var(--f-mono); font-weight: 600; font-size: var(--fs-md); }
 .keys button.wide { font-size: var(--fs-xs); letter-spacing: .08em; color: var(--c-accent); }
 .keys button:active { transform: translateY(2px); box-shadow: none; background: var(--c-line); }
+/* низкая область (экранная клавиатура на небольшом телефоне): терминал компактнее, без заголовка окна */
+@media (max-height: 520px) {
+  .term-head { display: none; }
+  .term-input { padding-bottom: var(--s-2); }
+  .keys { padding: var(--s-1) var(--s-2); }
+  .keys button { height: 38px; }
+}
 /* ANSI: палитра стиля. Каталог — сталь-синий жирный, ссылка — бирюза, исполняемый — шалфей,
    SUID/SGID/sticky и «чужие» права — инверсия (текст на цветной плашке), так что типы файлов различимы без цвета тоже. */
 .a-b { font-weight: 600; }
@@ -279,13 +319,14 @@ blockquote.callout.note > p:first-child > strong:first-child { background: var(-
 
 /* песочница */
 .sandbox { flex: 1; display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3) var(--gutter); min-height: 0; }
-.sandbox .term { flex: 1; }
+.sandbox .term { flex: 1 1 0; min-height: 184px; }
 .sandbox-head { display: flex; align-items: flex-end; gap: var(--s-3); }
 .sandbox-head .palych-wrap { flex: 1; }
 .sandbox-head .palych-sm .palych-box { width: 56px; }
 .sandbox-head .bubble:not(.show) { display: none; }
 .sandbox-head .btn { width: auto; flex: none; padding: 0 var(--s-3); }
 @media (max-height: 600px) { .sandbox-head .palych-wrap { display: none; } }
+@media (max-height: 520px) { .sandbox { padding-top: var(--s-2); padding-bottom: var(--s-2); gap: var(--s-2); } .sandbox .term { min-height: 140px; } }
 
 /* ---------- финиш ---------- */
 .finish { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-4); padding: var(--s-5) var(--gutter); text-align: center; }

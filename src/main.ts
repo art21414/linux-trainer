@@ -23,7 +23,9 @@ import { renderSandbox } from "./ui/sandbox";
 import { renderProfile } from "./ui/profile";
 import { back, go, onRoute } from "./ui/nav";
 import { sheetOpen } from "./ui/sheet";
+import { initViewport } from "./ui/viewport";
 
+initViewport();
 const app = document.getElementById("app")!;
 let cleanup: () => void = () => {};
 

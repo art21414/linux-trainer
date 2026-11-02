@@ -9,6 +9,10 @@ import { chgrpCommand, chmodCommand, chownCommand, umaskCommand } from "./comman
 import { userCommands } from "./commands/users";
 import { miscCommands } from "./commands/misc";
 import { storageCommands } from "./commands/storage";
+import { touchCommand } from "./commands/touch";
+import { cpCommand, mvCommand, rmCommand } from "./commands/fileops";
+import { linkCommands } from "./commands/links";
+import { fixGlobs } from "./globs";
 
 export type RunKind = "ok" | "error" | "notfound" | "unsupported" | "danger" | "sudo" | "clear" | "empty" | "su" | "exit";
 
@@ -33,6 +37,26 @@ const ERRNO: Record<string, string> = {
 /** Привести «сырые» ошибки ФС к виду, как в настоящем Linux. */
 export function normalizeErrors(s: string): string {
   return s.replace(/(?:Error: )?(E[A-Z]+): [a-z ,]+?, \w+ '[^']*'/g, (m, code: string) => ERRNO[code] ?? m);
+}
+
+/** `${X:?текст}`: bash пишет «bash: X: текст» (или «X: parameter null or not set»), just-bash теряет имя переменной. */
+export function fixParamErrors(line: string, stderr: string): string {
+  if (!stderr.includes("bash: ")) return stderr;
+  for (const m of line.matchAll(/\$\{(\w+)(:?)\?([^}$]*)\}/g)) {
+    const [, name, colon, msg] = m;
+    const bare = `bash: ${msg}`;
+    const fixed = `bash: ${name}: ${msg || (colon ? "parameter null or not set" : "parameter not set")}`;
+    const lines = stderr.split("\n");
+    const i = lines.findIndex((l) => l === bare);
+    if (i >= 0) {
+      lines[i] = fixed;
+      stderr = lines.join("\n");
+    } else if (!colon && !msg) {
+      // `${X?}` (без двоеточия): just-bash пишет «null or not set», bash — просто «not set»
+      stderr = stderr.replace(`bash: ${name}: parameter null or not set`, `bash: ${name}: parameter not set`);
+    }
+  }
+  return stderr;
 }
 
 /** Сервер по умолчанию: Rocky Linux 9, пользователи root, alice (wheel), bob. */
@@ -99,6 +123,11 @@ export class Shell {
       chownCommand(world),
       chgrpCommand(world),
       umaskCommand(world),
+      touchCommand(world),
+      rmCommand(world),
+      cpCommand(world),
+      mvCommand(world),
+      ...linkCommands(world),
       ...userCommands(world),
       ...miscCommands(world, opts.onUnsupported ?? (() => {})),
       ...storageCommands(world, opts.onUnsupported ?? (() => {})),
@@ -182,7 +211,7 @@ export class Shell {
     let stderr = "";
     let code = 0;
     try {
-      const r = await this.bash.exec(trimmed, { cwd: this.cwd, env: this.env });
+      const r = await this.bash.exec(await fixGlobs(w, this.cwd, trimmed), { cwd: this.cwd, env: this.env });
       stdout = r.stdout;
       stderr = r.stderr;
       code = r.exitCode;
@@ -205,7 +234,7 @@ export class Shell {
       w.pendingSu = null;
       kind = "su";
     }
-    stderr = normalizeErrors(stderr);
+    stderr = fixParamErrors(trimmed, normalizeErrors(stderr));
     const nf = /(?:^|\n)bash: (?:line \d+: )?([^:\s]+): command not found/.exec(stderr);
     if (nf) {
       this.onNotFound(nf[1]);

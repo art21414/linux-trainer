@@ -2,7 +2,6 @@
 import { defineCommand } from "just-bash";
 import type { Command } from "just-bash";
 import type { World } from "../world";
-import { resolve } from "../path";
 import { fail } from "../util";
 
 /** Команды, которые есть в RHEL, но тренажёр их пока не умеет. Пополняем по журналу. */
@@ -16,20 +15,6 @@ export const UNSUPPORTED = [
 ];
 
 export function miscCommands(w: World, onUnsupported: (name: string) => void): Command[] {
-  const rm = defineCommand("rm", async (args, ctx) => {
-    const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive");
-    const noPreserve = args.includes("--no-preserve-root");
-    const targets = args.filter((a) => !a.startsWith("-"));
-    if (recursive && !noPreserve && targets.some((t) => resolve(ctx.cwd, t) === "/")) {
-      return fail("rm: it is dangerous to operate recursively on '/'\nrm: use --no-preserve-root to override this failsafe");
-    }
-    if (recursive && targets.length > 3 && targets.every((t) => /^\/[^/]+$/.test(t)) && w.cur.uid === 0) {
-      // rm -rf /* — сервер жалко, просто не даём
-      return fail("тренажёр: rm -rf /* заблокирован. Палыч упал в обморок, но сервер жив.");
-    }
-    return ctx.origCommand!(args);
-  });
-
   const man = defineCommand("man", async (args) => {
     if (!args.length) return fail("What manual page do you want?\nFor example, try 'man man'.");
     return fail(`тренажёр: man пока не завезли. Попробуй ${args[args.length - 1]} --help — у многих команд работает.`, 16);
@@ -57,5 +42,5 @@ export function miscCommands(w: World, onUnsupported: (name: string) => void): C
     return { stdout: parts.join(" ") + "\n", stderr: "", exitCode: 0 };
   });
 
-  return [rm, man, uname, ...stubs];
+  return [man, uname, ...stubs];
 }

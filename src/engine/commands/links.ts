@@ -150,13 +150,14 @@ export function lnCommand(w: World): Command {
         }
         const dinf = await w.info(dest);
         if (dinf) {
-          if (!symbolic && w.inodes.sameFile(src, dest) && (await w.info(src))?.isLink === dinf.isLink) {
-            err += `ln: '${t}' and '${name}' are the same file\n`;
+          if (!f.has("f")) {
+            err += `ln: ${label}: File exists\n`;
             code = 1;
             continue;
           }
-          if (!f.has("f")) {
-            err += `ln: ${label}: File exists\n`;
+          // -f удалил бы единственную ссылку на файл — GNU ln этого не допускает
+          if (!symbolic && w.inodes.sameFile(src, dest) && (await w.info(src))?.isLink === dinf.isLink) {
+            err += `ln: '${t}' and '${name}' are the same file\n`;
             code = 1;
             continue;
           }

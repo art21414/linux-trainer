@@ -36,6 +36,8 @@ export class TerminalView {
   private draft = "";
   private busy = false;
   private ro?: ResizeObserver;
+  /** Команда задала вопрос (`rm -i`): ждём ответ в строке ввода. */
+  private asking: ((answer: string | null) => void) | null = null;
   onResult?: (r: RunResult, line: string) => void;
   /** Пользователь печатает (для реакций Палыча). */
   onTyping?: () => void;
@@ -95,9 +97,37 @@ export class TerminalView {
       }
     });
     this.input.addEventListener("input", () => this.onTyping?.());
-    this.input.addEventListener("focus", () => setTimeout(() => this.scrollDown(), 300));
+    // клавиатура меняет высоту окна вывода (ResizeObserver подтянет вывод вниз); на всякий случай ещё раз после анимации
+    // и, если область задания всё же прокручивается (очень низкое окно), показываем терминал целиком
+    this.input.addEventListener("focus", () =>
+      [100, 350, 700].forEach((t) =>
+        setTimeout(() => {
+          this.scrollDown();
+          this.el.scrollIntoView({ block: "nearest" });
+        }, t),
+      ),
+    );
     if (opts.motd) this.print(opts.motd, "note");
     this.updatePrompt();
+    // интерактивные вопросы команд (rm -i, cp -i, mv -i): вопрос встаёт на место приглашения, ответ вводится в строке ввода
+    shell.world.readLine = (question) => this.askLine(question);
+  }
+
+  private askLine(question: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.promptEl.textContent = question;
+      this.el.classList.remove("busy");
+      this.input.value = "";
+      this.focus();
+      this.asking = (answer) => {
+        this.asking = null;
+        this.out.append(h("div", { class: "line" }, h("span", { class: "pr" }, question), h("span", { class: "cmd" }, answer ?? "^C")));
+        this.scrollDown();
+        this.el.classList.add("busy");
+        this.input.value = "";
+        resolve(answer);
+      };
+    });
   }
 
   mount(): void {
@@ -111,6 +141,7 @@ export class TerminalView {
 
   destroy(): void {
     this.ro?.disconnect();
+    this.asking?.(null);
   }
 
   /** Сколько символов влезает в строку — для ls в колонках. */
@@ -123,8 +154,9 @@ export class TerminalView {
     this.shell.world.cols = Math.max(20, Math.floor(width / cw));
   }
 
-  focus(scroll = true): void {
-    this.input.focus({ preventScroll: !scroll });
+  /** Фокус в строку ввода. Страницу не прокручиваем никогда: раскладка и так держит строку и панель в видимой области. */
+  focus(_scroll = false): void {
+    this.input.focus({ preventScroll: true });
   }
 
   private updatePrompt(): void {
@@ -152,6 +184,10 @@ export class TerminalView {
   }
 
   private async submit(): Promise<void> {
+    if (this.asking) {
+      this.asking(this.input.value);
+      return;
+    }
     if (this.busy) return;
     const line = this.input.value;
     this.input.value = "";
@@ -183,6 +219,16 @@ export class TerminalView {
   private async key(k: string): Promise<void> {
     const inp = this.input;
     const hist = this.shell.history;
+    if (this.asking) {
+      // отвечаем на вопрос команды: Tab и история не нужны, ^C — «нет»
+      if (k === "^C") this.asking(null);
+      else if (k !== "Tab" && k !== "↑" && k !== "↓") {
+        const s = inp.selectionStart ?? inp.value.length;
+        inp.setRangeText(k, s, inp.selectionEnd ?? s, "end");
+      }
+      inp.focus({ preventScroll: true });
+      return;
+    }
     if (k === "Tab") {
       const pos = inp.selectionStart ?? inp.value.length;
       const head = inp.value.slice(0, pos);
