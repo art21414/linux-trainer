@@ -1,10 +1,11 @@
 // Реестр тем. Порядок разделов и тем — порядок отображения.
 import type { Exercise, PracticeSet, Section, Topic } from "../types";
+import { files } from "./01-files";
 import { permissions } from "./02-permissions";
 
 // Каждая тема добавляет себя в свой раздел. Пустые разделы на экране не показываются.
 export const SECTIONS: Section[] = [
-  { id: "files", title: "Файлы и доступ", topics: [permissions] },
+  { id: "files", title: "Файлы и доступ", topics: [files, permissions] },
   { id: "search", title: "Поиск и потоки", topics: [] },
   { id: "disks", title: "Диски и файловые системы", topics: [] },
   { id: "procs", title: "Процессы", topics: [] },
