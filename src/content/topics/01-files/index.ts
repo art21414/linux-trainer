@@ -442,24 +442,29 @@ export const files: Topic = {
       {
         id: "files-exam-03",
         type: "terminal",
-        theory: "glob",
+        theory: "rm",
         prompt:
-          "Скрипт с ошибкой в кавычках создал в **/srv/reports** файл с именем `*`. Удали его, отчёты не трогай.",
+          "В **/srv/inbox** — загрузки от внешнего клиента, имена файлов могут быть любыми. Удали из каталога все файлы, а подкаталог **keep** со всем содержимым оставь.",
         setup: async (w) => {
-          for (const f of ["*", "2025-09.csv", "2025-10.csv", "summary.txt"]) await w.write(`/srv/reports/${f}`, f === "*" ? "" : `${f}\n`);
+          await w.write("/srv/inbox/keep/contract.pdf", "PDF\n");
+          for (const f of ["-rf", "invoice.pdf", "notes.txt"]) await w.write(`/srv/inbox/${f}`, f === "-rf" ? "" : `${f}\n`);
         },
         check: async ({ world }) => {
-          const left = await ls(world, "/srv/reports");
-          if (!left) return "Каталог /srv/reports пропал. Начни заново.";
-          const lost = ["2025-09.csv", "2025-10.csv", "summary.txt"].filter((f) => !left.includes(f));
-          if (lost.length) return "Удалились и отчёты: без кавычек * — это все файлы каталога. Начни заново и экранируй звёздочку.";
-          return !left.includes("*");
+          if (!(await world.exists("/srv/inbox/keep/contract.pdf")))
+            return "keep удалён: файл -rf попал в rm как ключи (* подставляет голые имена). Начни заново: ./* или полный путь.";
+          const left = (await ls(world, "/srv/inbox")) ?? [];
+          const files: string[] = [];
+          for (const n of left) if (!(await world.info(`/srv/inbox/${n}`))?.isDir) files.push(n);
+          if (files.length === 0) return true;
+          if (files.length === 1 && files[0] === "-rf") return "Остался файл -rf: rm принимает его за ключи. Помогут ./-rf или --.";
+          return false;
         },
-        hint: "Без кавычек * раскроется во все файлы. Сделай звёздочку обычным символом.",
-        solution: "rm '/srv/reports/*'",
-        accept: ["cd /srv/reports\nrm \\*", "rm -- \"/srv/reports/*\""],
-        reject: ["rm /srv/reports/*"],
-        explain: "В одинарных, двойных кавычках или после `\\` glob не работает — rm получает имя `*` буквально. Без них `*` раскроется в список всех файлов каталога.",
+        hint: "Сначала посмотри, что за имена там лежат. Если какое-то начинается с дефиса — * подставит его в rm как ключ.",
+        solution: "find /srv/inbox -maxdepth 1 -type f -delete",
+        accept: ["cd /srv/inbox\nrm ./*", "rm /srv/inbox/*"],
+        reject: ["cd /srv/inbox\nrm *"],
+        explain:
+          "`*` раскрывается в голые имена, и `-rf` достаётся rm как ключи: `rm *` сносит keep, а сам `-rf` остаётся. `./*` и `/srv/inbox/*` дают имена не с дефиса (rm только скажет, что keep — каталог), `--` объявляет конец ключей. `find -type f -delete` от имён не зависит вовсе.",
       },
       {
         id: "files-exam-04",

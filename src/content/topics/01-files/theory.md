@@ -10,7 +10,7 @@
 | atime | Access | читают содержимое | `-lu` |
 | mtime | Modify | меняют содержимое | `-l` |
 | ctime | Change | меняют inode: права, владельца, имя, число ссылок — и вместе с любой сменой mtime | `-lc` |
-| btime | Birth | файл создан | — |
+| btime | Birth | файл создан | `-l --time=birth` |
 
 **ctime — не «creation».** Время создания — `Birth`: XFS его хранит, `stat` в RHEL 9 показывает.
 
