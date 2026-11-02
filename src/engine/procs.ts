@@ -465,7 +465,7 @@ export class ProcTable {
 
   /** Временный процесс на время команды. */
   spawnTransient(cmd: string, user?: string | number): number {
-    return this.add({ cmd, user, state: "R", tty: "pts/0", fg: true, transient: true, wchan: "-" });
+    return this.add({ cmd, user, state: "R", tty: "pts/0", fg: true, transient: true, wchan: "-", nice: this.w.niceFor || (this.procs.get(this.w.shellPid)?.nice ?? 0) });
   }
 
   /** Взять заранее созданный процесс этапа пайплайна (ps в `ps | grep`). */
@@ -482,6 +482,30 @@ export class ProcTable {
   clearTransient(): void {
     for (const p of [...this.procs.values()]) if (p.transient) this.procs.delete(p.pid);
     this.version++;
+  }
+
+  // ---------- сессии пользователей ----------
+
+  /** Вход по ssh: sshd [priv] → sshd@pts/0 → -bash (+ systemd --user). Возвращает pid bash. */
+  login(userName: string): number {
+    const u = this.w.user(userName);
+    const uid = u?.uid ?? 0;
+    const t = Date.now() - 20 * 60 * 1000;
+    const priv = this.add({ cmd: `sshd: ${userName} [priv]`, comm: "sshd", user: 0, ppid: 768, start: t, leader: true, wchan: "do_sel" });
+    const sess = this.add({ cmd: `sshd: ${userName}@pts/0`, comm: "sshd", user: uid, ppid: priv, start: t, wchan: "do_sel" });
+    if (uid !== 0) {
+      const sd = this.add({ cmd: "/usr/lib/systemd/systemd --user", comm: "systemd", user: uid, ppid: 1, start: t, leader: true, rss: 10188, vsz: 22608, wchan: "ep_pol" });
+      this.add({ cmd: "(sd-pam)", comm: "(sd-pam)", user: uid, ppid: sd, start: t, rss: 3088, vsz: 108088 });
+    }
+    const bash = this.add({ cmd: "-bash", comm: "bash", user: uid, ppid: sess, start: t, tty: "pts/0", leader: true, wchan: "do_wai", rss: 4872, vsz: 232676, cpuSec: 0 });
+    return bash;
+  }
+
+  /** su / su -: процесс su (от текущего пользователя) и его оболочка (от целевого). */
+  suSession(parentShell: number, from: string, target: string, loginShell: boolean): { su: number; shell: number } {
+    const su = this.add({ cmd: loginShell ? `su - ${target}` : `su ${target}`, comm: "su", user: from, ppid: parentShell, tty: "pts/0", wchan: "do_wai", rss: 3312, vsz: 22248 });
+    const shell = this.add({ cmd: loginShell ? "-bash" : "bash", comm: "bash", user: target, ppid: su, tty: "pts/0", leader: true, wchan: "do_wai", rss: 4872, vsz: 232676 });
+    return { su, shell };
   }
 
   // ---------- имена и время ----------

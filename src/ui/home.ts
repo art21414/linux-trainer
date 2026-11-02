@@ -7,7 +7,7 @@ import { reviewCount } from "../state/review";
 import { h } from "./dom";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { Mascot } from "./mascot";
+import { Mascot, timeEvent } from "./mascot";
 import { navBar, topBar } from "./chrome";
 
 export const STATUS_LABEL: Record<TopicStatus, string> = {
@@ -54,7 +54,10 @@ function topicRow(t: Topic, go: (hash: string) => void, isCurrent: boolean): HTM
 }
 
 export function renderHome(root: HTMLElement, go: (hash: string) => void): () => void {
-  const mascot = new Mascot({ size: "md", greet: true });
+  const mascot = new Mascot({ size: "sm", greet: false });
+  const ev = timeEvent(progress.streak.last ? Date.parse(progress.streak.last) : undefined);
+  if (ev) mascot.react(ev);
+  else mascot.react("greet");
   const goal = progress.settings.dailyGoal;
   const dxp = dailyXp();
   const cont = continueTarget(ALL_TOPICS);
@@ -64,6 +67,7 @@ export function renderHome(root: HTMLElement, go: (hash: string) => void): () =>
   const page = h("div", { class: "program" });
   scroll.append(page);
   page.append(
+    h("div", { class: "hero hero--home" }, mascot.el),
     h(
       "div",
       { class: "goal" },
@@ -106,6 +110,6 @@ export function renderHome(root: HTMLElement, go: (hash: string) => void): () =>
     page.append(list);
   }
 
-  root.append(h("div", { class: "screen" }, topBar(), h("div", { class: "hero hero--home" }, mascot.el), scroll, navBar("home", go)));
+  root.append(h("div", { class: "screen" }, topBar(), scroll, navBar("home", go)));
   return () => mascot.destroy();
 }

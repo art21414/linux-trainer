@@ -8,6 +8,7 @@ import { catCommand, lsCommand, statCommand } from "./commands/files";
 import { chgrpCommand, chmodCommand, chownCommand, umaskCommand } from "./commands/perms";
 import { userCommands } from "./commands/users";
 import { miscCommands } from "./commands/misc";
+import { storageCommands } from "./commands/storage";
 
 export type RunKind = "ok" | "error" | "notfound" | "unsupported" | "danger" | "sudo" | "clear" | "empty" | "su" | "exit";
 
@@ -65,13 +66,10 @@ export async function createServer(): Promise<World> {
   );
   await w.write("/etc/shadow", "root:!::0:99999:7:::\nalice:$6$xyz::0:99999:7:::\nbob:$6$abc::0:99999:7:::\n", 0o000);
   await w.write("/etc/hosts", "127.0.0.1   localhost localhost.localdomain\n::1         localhost localhost.localdomain\n");
-  await w.write(
-    "/etc/fstab",
-    "/dev/mapper/rl-root     /                       xfs     defaults        0 0\nUUID=3c6d1e2a-boot      /boot                   xfs     defaults        0 0\n/dev/mapper/rl-swap     none                    swap    defaults        0 0\n",
-  );
   await w.write("/etc/motd", "");
   await w.write("/var/log/messages", "Oct 26 08:00:01 server1 systemd[1]: Started Session 1 of User root.\n", 0o600);
   await w.write("/var/log/secure", "Oct 26 08:00:01 server1 sshd[812]: Accepted publickey for alice\n", 0o600);
+  await w.storage.init(); // диски, ФС, /etc/fstab, /dev, /proc/mounts
   return w;
 }
 
@@ -103,6 +101,7 @@ export class Shell {
       umaskCommand(world),
       ...userCommands(world),
       ...miscCommands(world, opts.onUnsupported ?? (() => {})),
+      ...storageCommands(world, opts.onUnsupported ?? (() => {})),
     ];
     world.current = "root";
     const user = world.user(opts.user ?? "root")!;

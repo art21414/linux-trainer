@@ -120,7 +120,7 @@ export function renderProfile(root: HTMLElement, go: (hash: string) => void, rer
         },
         "Сбросить прогресс",
       ),
-      h("p", { style: { textAlign: "center", color: "var(--muted)", fontSize: "12px", fontWeight: "700" } }, `linux-trainer ${__APP_VERSION__} · Палыч одобряет`),
+      h("p", { style: { textAlign: "center", color: "var(--c-muted)", fontFamily: "var(--f-mono)", fontSize: "12px" } }, `linux-trainer ${__APP_VERSION__} · Палыч одобряет`),
     ),
   );
   root.append(h("div", { class: "screen" }, topBar(), scroll, navBar("profile", go)));

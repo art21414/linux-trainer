@@ -167,7 +167,7 @@ export function humanFree(kib: number): string {
   const units = ["Ki", "Mi", "Gi", "Ti"];
   let v = b / KiB;
   let i = 0;
-  while (v >= 1000 && i < units.length - 1) {
+  while (v >= KiB && i < units.length - 1) {
     v /= KiB;
     i++;
   }
@@ -313,14 +313,17 @@ export function buildOpts(fstype: string, list: string[], tmpDefaultKib = 0): Bu
   let bind = false;
   const fsSpecific = fstype === "xfs" ? XFS_OPTS : fstype === "ext4" ? EXT4_OPTS : fstype === "tmpfs" ? TMPFS_OPTS : /^$/;
   const extra: string[] = [];
+  const opposite: Record<string, string> = { rw: "ro", ro: "rw", suid: "nosuid", nosuid: "suid", dev: "nodev", nodev: "dev", exec: "noexec", noexec: "exec", atime: "noatime", noatime: "atime", relatime: "noatime", async: "sync", sync: "async" };
   for (const t of toks) {
     if (t === "remount") remount = true;
     else if (t === "bind" || t === "rbind") bind = true;
-    if (GENERIC_OPTS.has(t) || X_OPTS.test(t)) set.add(t);
-    else if (fsSpecific.test(t)) extra.push(t);
+    if (GENERIC_OPTS.has(t) || X_OPTS.test(t)) {
+      if (opposite[t]) set.delete(opposite[t]);
+      set.add(t);
+    } else if (fsSpecific.test(t)) extra.push(t);
     else bad.push(t);
   }
-  const ro = set.has("ro") && !set.has("rw") ? true : set.has("rw") ? false : false;
+  const ro = set.has("ro");
   const vfs: string[] = [ro ? "ro" : "rw"];
   if (set.has("sync")) vfs.push("sync");
   if (set.has("nosuid")) vfs.push("nosuid");
@@ -376,7 +379,6 @@ export class Storage {
   memTotalKib = 3815640;
   private nextMountId = 22;
   private rnd = prng(0x5eed1e);
-  private counter = 0;
 
   constructor(private w: World) {}
 
@@ -992,6 +994,27 @@ export class Storage {
     this.mounts = this.mounts.filter((x) => x.id !== m.id);
     await this.syncProc();
     return null;
+  }
+
+  /** mount -o remount,...: обновить опции существующего монтирования. Вернуть ошибку или null. */
+  async remount(m: Mount, optList: string[]): Promise<string | null> {
+    const spec = m.fstype === "xfs" ? XFS_OPTS : m.fstype === "ext4" ? EXT4_OPTS : m.fstype === "tmpfs" ? TMPFS_OPTS : /^$/;
+    const cur = [...m.vfs, ...m.fsopts.filter((x) => spec.test(x) && !/^(inode64|attr2|noquota|logbufs=8|logbsize=32k)$/.test(x))];
+    const o = buildOpts(m.fstype, [...cur, ...optList.flatMap((x) => x.split(",")).filter((x) => x !== "remount")]);
+    if (o.bad.length) return "bad";
+    m.vfs = o.vfs;
+    m.fsopts = o.fsopts;
+    if (m.tmp && o.tmpSizeKib && optList.join(",").includes("size=")) m.tmp.size = o.tmpSizeKib * KiB;
+    await this.syncProc();
+    return null;
+  }
+
+  /** Удалить устройство вместе с дочерними (для затирания таблицы разделов). */
+  async removeDev(name: string): Promise<void> {
+    for (const k of this.children(name)) await this.removeDev(k.name);
+    this.devs = this.devs.filter((d) => d.name !== name);
+    await this.syncDev();
+    await this.syncProc();
   }
 
   /** Список точек монтирования устройств (для lsblk): [SWAP] для активного swap. */

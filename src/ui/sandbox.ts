@@ -40,7 +40,8 @@ export function renderSandbox(root: HTMLElement, go: (hash: string) => void): ()
     current = s.term;
     area.append(s.term.el);
     s.term.mount();
-    s.term.onResult = (r) => reactToCommand(mascot, r);
+    s.term.onResult = (r) => reactToCommand(mascot, r, s.shell.user.name);
+    s.term.onTyping = () => mascot.setMood("typing", 1500);
   };
 
   void (async () => {

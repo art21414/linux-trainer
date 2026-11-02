@@ -6,6 +6,7 @@ import type { IFileSystem } from "just-bash";
 import { normalize, dirname } from "./path";
 import { InodeTable } from "./inodes";
 import { ProcTable } from "./procs";
+import { Storage } from "./storage";
 
 export interface User {
   name: string;
@@ -48,6 +49,8 @@ export class FsError extends Error {
       EACCES: "permission denied",
       EPERM: "operation not permitted",
       ENOENT: "no such file or directory",
+      EROFS: "read only file system",
+      ENOSPC: "no space left on device",
     };
     super(`${code}: ${text[code] ?? code}, ${op} '${path}'`);
     this.code = code;
@@ -81,8 +84,12 @@ export class World {
   readonly inodes = new InodeTable();
   /** Таблица процессов (см. procs.ts). */
   readonly procs: ProcTable = new ProcTable(this);
+  /** Диски, ФС, монтирование, учёт места (см. storage.ts). */
+  readonly storage: Storage = new Storage(this);
   /** PID текущего shell-процесса (ставит Shell). */
   shellPid = 0;
+  /** nice, который наследуют запускаемые сейчас команды (`nice -n 5 cmd`). */
+  niceFor = 0;
   /** Журнал вывода команд по порядку: для правильного чередования stdout/stderr (см. streams.ts). */
   trace: { out: string; err: string; chunks?: ["o" | "e", string][] }[] = [];
 
@@ -209,7 +216,7 @@ export class World {
         isDir: s.isDirectory,
         isFile: s.isFile,
         isLink: s.isSymbolicLink,
-        size: s.size,
+        size: this.storage.virt.get(p)?.apparent ?? s.size,
         mtime: s.mtime,
       };
     } catch {
@@ -512,6 +519,19 @@ export class World {
         return base.lstat(p);
       },
     };
+
+    // storage.ts: ФС только для чтения, «нет места», учёт виртуальных размеров
+    for (const op of ["writeFile", "appendFile", "createExclusive", "mkdir", "rm", "cp", "mv", "symlink", "link"]) {
+      const orig = hooks[op];
+      if (!orig) continue;
+      hooks[op] = async (...a: unknown[]) => {
+        const bad = await w.storage.guardFs(op, a);
+        if (bad) throw new FsError(bad.code, op === "writeFile" || op === "appendFile" || op === "createExclusive" ? "open" : op, bad.path);
+        const r = await orig(...a);
+        w.storage.afterFs(op, a);
+        return r;
+      };
+    }
 
     return new Proxy(base, {
       get(target, prop, receiver) {

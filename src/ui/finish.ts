@@ -22,27 +22,6 @@ export function lessonXp(o: LessonOutcome): number {
   }
 }
 
-function confetti(): HTMLElement {
-  const box = h("div", { class: "confetti" });
-  const cs = getComputedStyle(document.documentElement);
-  const colors = ["--c-accent", "--c-ok", "--c-text", "--c-warn"].map((v) => cs.getPropertyValue(v).trim() || "#f2a03d");
-  for (let i = 0; i < 50; i++) {
-    box.append(
-      h("i", {
-        style: {
-          left: `${Math.random() * 100}%`,
-          background: colors[i % colors.length],
-          animationDuration: `${1.8 + Math.random() * 1.8}s`,
-          animationDelay: `${Math.random() * 0.6}s`,
-          transform: `rotate(${Math.random() * 360}deg)`,
-        },
-      }),
-    );
-  }
-  setTimeout(() => box.remove(), 4500);
-  return box;
-}
-
 export function renderFinish(root: HTMLElement, o: LessonOutcome, go: (hash: string) => void): () => void {
   const { spec } = o;
   const xp = lessonXp(o);
@@ -54,8 +33,12 @@ export function renderFinish(root: HTMLElement, o: LessonOutcome, go: (hash: str
   const mascot = new Mascot({ size: "lg", bubble: true });
   play("finish");
   setTimeout(() => {
-    mascot.setMood(failedExam ? "think" : "happy", 4000);
-    mascot.say(failedExam ? "Не сдал. Это данные, не приговор. Читай и приходи." : clean ? "Без единой ошибки?! Ладно, признаю — красава." : pick(PHRASES.complete), 0);
+    if (passed) mascot.react("examPassed");
+    else if (streakUp && !failedExam) mascot.react("streak");
+    else {
+      mascot.setMood(failedExam ? "think" : "happy", 4000);
+      mascot.say(failedExam ? "Не сдал. Это данные, не приговор. Читай и приходи." : clean ? "Без единой ошибки?! Ладно, признаю — красава." : pick(PHRASES.complete), 0);
+    }
   }, 300);
 
   const mm = Math.floor(o.seconds / 60);
@@ -88,7 +71,6 @@ export function renderFinish(root: HTMLElement, o: LessonOutcome, go: (hash: str
   if (topic) actions.append(h("button", { class: "btn ghost", onclick: () => go(`#/topic/${topic.id}`) }, "К теме"));
 
   root.append(
-    ...(passed || clean ? [confetti()] : []),
     h(
       "div",
       { class: "screen" },

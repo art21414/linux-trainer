@@ -74,7 +74,7 @@ function shuffle<T>(arr: T[]): T[] {
 
 // ---------- представления заданий ----------
 
-function choiceView(ex: ChoiceEx, onChange: () => void): View {
+function choiceView(ex: ChoiceEx, onChange: () => void, onActivity?: () => void): View {
   let sel = -1;
   const order = shuffle(ex.options.map((_, i) => i));
   const btns: HTMLButtonElement[] = [];
@@ -87,6 +87,7 @@ function choiceView(ex: ChoiceEx, onChange: () => void): View {
       btns.forEach((x) => x.classList.remove("sel"));
       b.classList.add("sel");
       play("tap");
+      onActivity?.();
       onChange();
     });
     b.dataset.idx = String(idx);
@@ -130,6 +131,8 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
   let view: View | null = null;
   let termCleanup: (() => void) | null = null;
   let theorySheet: SheetHandle | null = null;
+  /** Палыч, который сейчас на экране задания (для реакций на «Теорию» и «долго думает»). */
+  let live: Mascot | null = null;
   const failed = new Set<number>();
 
   const bar = h("i", { style: { width: "0%" } });
@@ -145,13 +148,14 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
   const footerRow = h("div", { class: "row" }, checkBtn);
   const sheetMascot = new Mascot({ size: "sm", bubble: false });
   const sheetTitle = h("h3", {});
-  const sheetIco = h("div", { class: "ico" });
+  const sheetIco = h("div", { class: "sheet-ico" });
+  const sheetCode = h("span", { class: "sheet-code" });
   const sheetBody = h("div", { class: "sheet-body" });
   const sheetBtn = h("button", { class: "btn" }, "Продолжить");
   const sheet = h(
     "div",
     { class: "sheet" },
-    h("div", { class: "sheet-head" }, sheetIco, sheetTitle, h("div", { style: { marginLeft: "auto" } }, sheetMascot.el)),
+    h("div", { class: "sheet-head" }, sheetIco, h("div", { class: "sheet-titles" }, sheetCode, sheetTitle), sheetMascot.el),
     sheetBody,
     sheetBtn,
   );
@@ -167,10 +171,11 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
   const showSheet = (ok: boolean, title: string, html: string) => {
     sheet.className = `sheet show ${ok ? "ok" : "bad"}`;
     sheetIco.replaceChildren(icon(ok ? "check" : "cross", { size: 20 }));
+    sheetCode.textContent = ok ? "OK exit 0" : "FAIL exit 1";
     sheetTitle.textContent = title;
     sheetBody.innerHTML = html;
     sheetBtn.className = `btn ${ok ? "" : "red"}`;
-    sheetMascot.react(ok ? "correct" : "wrong", undefined, false);
+    sheetMascot.react(ok ? (combo > 0 && combo % 3 === 0 ? "combo" : "correct") : "wrong", undefined, false);
     setTimeout(() => sheetBtn.focus({ preventScroll: true }), 50);
   };
 
@@ -215,6 +220,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     if (!sec) return toast("Для этого задания нет подтемы");
     (document.activeElement as HTMLElement | null)?.blur();
     markRead(cur.topicId, sec.anchor);
+    live?.react("theoryOpen", undefined, false);
     theorySheet = openSheet(root, sec.title, renderMarkdown(sec.body), () => (theorySheet = null));
   };
 
@@ -222,6 +228,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     view?.destroy?.();
     termCleanup?.();
     termCleanup = null;
+    live = null;
     sheet.className = "sheet";
     if (!queue.length) return finish();
     const idx = queue.shift()!;
@@ -234,7 +241,16 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     if (ex.type === "terminal") return showTerminal(item, ex, idx);
     body.className = "scroll";
     const onChange = () => (checkBtn.disabled = !view!.ready());
-    view = choiceView(ex, onChange);
+    const thinker = new Mascot({ size: "sm" });
+    live = thinker;
+    thinker.armSlow();
+    view = choiceView(ex, onChange, () => thinker.activity());
+    view.el.append(thinker.el);
+    const baseDestroy = view.destroy;
+    view.destroy = () => {
+      baseDestroy?.();
+      thinker.destroy();
+    };
     body.append(view.el);
     footerRow.replaceChildren(checkBtn);
     checkBtn.textContent = "Проверить";
@@ -271,6 +287,12 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     });
     const term = new TerminalView(shell);
     const mascot = new Mascot({ size: "sm" });
+    live = mascot;
+    mascot.armSlow();
+    term.onTyping = () => {
+      mascot.setMood("typing", 1500);
+      mascot.activity();
+    };
     const near = h("span", { class: "near" });
     const hintBox = h("div", { class: "hint-box", style: { display: "none" } });
     const card = h("div", { class: "task-card" }, h("span", { html: mdInline(ex.prompt) }), near);
@@ -299,7 +321,8 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
 
     term.onResult = async (r: RunResult) => {
       if (done) return;
-      reactToCommand(mascot, r);
+      mascot.activity();
+      reactToCommand(mascot, r, shell.user.name);
       const res = await ex.check({ world: w, shell });
       if (res === true) {
         done = true;
@@ -337,7 +360,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
 }
 
 /** Реакция Палыча на результат команды. */
-export function reactToCommand(m: Mascot, r: RunResult): void {
+export function reactToCommand(m: Mascot, r: RunResult, user?: string): void {
   switch (r.kind) {
     case "danger":
       vibrate([80, 40, 80, 40, 120]);
@@ -347,9 +370,9 @@ export function reactToCommand(m: Mascot, r: RunResult): void {
     case "unsupported":
       return m.react("unsupported");
     case "sudo":
-      return m.react("sudo");
+      return m.react(user === "root" ? "root" : "sudo");
     case "su":
-      return m.react("su");
+      return m.react(user === "root" ? "root" : "su");
     case "clear":
       return m.react("clear");
     case "error":
