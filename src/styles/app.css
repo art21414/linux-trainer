@@ -160,7 +160,7 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; }
 pre.codeblock .ps { color: var(--c-accent); }
 .theory-md .table-wrap { max-width: 100%; overflow-x: auto; margin: 0 0 var(--s-3); -webkit-overflow-scrolling: touch; border: var(--bw-thin) solid var(--c-line); }
 .theory-md table { border-collapse: collapse; font-size: var(--fs-sm); min-width: 100%; }
-.theory-md th, .theory-md td { border-bottom: var(--bw-thin) solid var(--c-line); border-right: var(--bw-thin) solid var(--c-line); padding: var(--s-2); text-align: left; vertical-align: top; min-width: 9ch; }
+.theory-md th, .theory-md td { border-bottom: var(--bw-thin) solid var(--c-line); border-right: var(--bw-thin) solid var(--c-line); padding: var(--s-2); text-align: left; vertical-align: top; min-width: 12ch; }
 .theory-md th:last-child, .theory-md td:last-child { border-right: 0; }
 .theory-md tr:last-child td { border-bottom: 0; }
 .theory-md th { background: var(--c-surface-2); white-space: nowrap; font-family: var(--f-mono); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--c-text-2); }
@@ -251,13 +251,13 @@ blockquote.callout.note > p:first-child > strong:first-child { background: var(-
 .term-head { display: flex; align-items: center; gap: var(--s-2); padding: 0 var(--s-3); height: 28px; flex: none; background: var(--c-surface); border-bottom: var(--bw) solid var(--c-line); font-family: var(--f-mono); font-size: var(--fs-xs); color: var(--c-muted); }
 .term-head::before { content: ""; width: 8px; height: 8px; background: var(--c-accent); flex: none; }
 .term-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.term-out { flex: 1; overflow-y: auto; padding: var(--s-2) var(--s-3) var(--s-1); font-family: var(--f-mono); font-size: 13px; line-height: 1.5; color: var(--c-text); white-space: pre-wrap; overflow-wrap: anywhere; min-height: 0; background-image: var(--scanline); }
+.term-out { flex: 1; overflow-y: auto; padding: var(--s-2) var(--s-2) var(--s-1); font-family: var(--f-mono); font-size: 12px; line-height: 1.5; color: var(--c-text); white-space: pre-wrap; overflow-wrap: anywhere; min-height: 0; background-image: var(--scanline); }
 .term-out .line { min-height: 1.5em; animation: line-in var(--d-fast) steps(3, end) both; }
 @keyframes line-in { from { opacity: 0; } }
 .term-out .cmd { color: var(--c-text); font-weight: 600; }
 .term-out .pr { color: var(--c-text-2); }
 .term-out .note { color: var(--c-muted); }
-.term-input { display: flex; align-items: baseline; padding: 0 var(--s-3) var(--s-3); font-family: var(--f-mono); font-size: 13px; flex: none; }
+.term-input { display: flex; align-items: baseline; padding: 0 var(--s-3) var(--s-3); font-family: var(--f-mono); font-size: 12px; flex: none; }
 .term-input .pr { color: var(--c-text-2); white-space: pre; flex: none; }
 .term-input input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--c-text); font-family: var(--f-mono); font-size: 13px; font-weight: 600; padding: 0; line-height: 1.5; caret-color: var(--c-accent); caret-shape: block; }
 .term-input input:focus-visible { outline: 0; }

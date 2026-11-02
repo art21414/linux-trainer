@@ -898,7 +898,7 @@ export function procCommands(w: World, onUnsupported: (name: string) => void = (
     const prev = w.niceFor;
     w.niceFor = nv;
     try {
-      const r = await ctx.exec!(cmd.map(quoteArg).join(" "), { cwd: ctx.cwd, env: ctx.env });
+      const r = await ctx.exec!(cmd.map(quoteArg).join(" "), { cwd: ctx.cwd, env: Object.fromEntries(ctx.env as any) });
       return { stdout: r.stdout, stderr: err + r.stderr, exitCode: r.exitCode };
     } finally {
       w.niceFor = prev;
@@ -1185,7 +1185,7 @@ export function procCommands(w: World, onUnsupported: (name: string) => void = (
     job.notified = false;
     let r;
     try {
-      r = await ctx.exec!(args.map(quoteArg).join(" "), { cwd: ctx.cwd, env: ctx.env });
+      r = await ctx.exec!(args.map(quoteArg).join(" "), { cwd: ctx.cwd, env: Object.fromEntries(ctx.env as any) });
     } catch {
       r = { stdout: "", stderr: "", exitCode: 1 };
     }
