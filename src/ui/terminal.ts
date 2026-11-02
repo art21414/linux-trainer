@@ -37,6 +37,8 @@ export class TerminalView {
   private busy = false;
   private ro?: ResizeObserver;
   onResult?: (r: RunResult, line: string) => void;
+  /** Пользователь печатает (для реакций Палыча). */
+  onTyping?: () => void;
 
   constructor(
     readonly shell: Shell,
@@ -58,9 +60,6 @@ export class TerminalView {
     const head = h(
       "div",
       { class: "term-head" },
-      h("i", { style: { background: "#ff5f57" } }),
-      h("i", { style: { background: "#febc2e" } }),
-      h("i", { style: { background: "#28c840" } }),
       this.title,
     );
     const keys = h("div", { class: "keys" });
@@ -95,6 +94,7 @@ export class TerminalView {
         this.out.innerHTML = "";
       }
     });
+    this.input.addEventListener("input", () => this.onTyping?.());
     this.input.addEventListener("focus", () => setTimeout(() => this.scrollDown(), 300));
     if (opts.motd) this.print(opts.motd, "note");
     this.updatePrompt();

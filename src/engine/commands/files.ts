@@ -9,6 +9,7 @@ const C = {
   dir: "\x1b[01;34m",
   link: "\x1b[01;36m",
   exec: "\x1b[01;32m",
+  orphan: "\x1b[40;31;01m", // битый симлинк
   tw: "\x1b[30;42m", // каталог со sticky и правом записи для всех (/tmp)
   ow: "\x1b[34;42m",
   reset: "\x1b[0m",
@@ -31,10 +32,25 @@ export function modeString(inf: Pick<NodeInfo, "mode" | "isDir" | "isLink">): st
   );
 }
 
-function colorize(w: World, inf: NodeInfo, name: string): string {
+/** Число жёстких ссылок: у файла — по таблице inode, у каталога — 2 + число подкаталогов. */
+export async function linkCount(w: World, inf: NodeInfo): Promise<number> {
+  if (!inf.isDir) return inf.isLink ? 1 : w.inodes.count(inf.path);
+  let n = 2;
+  try {
+    for (const e of await w.base.readdir(inf.path)) {
+      const s = await w.info(inf.path === "/" ? "/" + e : inf.path + "/" + e);
+      if (s?.isDir) n++;
+    }
+  } catch {
+    /* пусто */
+  }
+  return n;
+}
+
+function colorize(w: World, inf: NodeInfo, name: string, broken = false): string {
   if (!w.tty) return name;
   let c = "";
-  if (inf.isLink) c = C.link;
+  if (inf.isLink) c = broken ? C.orphan : C.link;
   else if (inf.isDir) {
     const ow = (inf.mode & 0o002) !== 0;
     const st = (inf.mode & 0o1000) !== 0;
@@ -114,19 +130,7 @@ export function lsCommand(w: World): Command {
     let err = "";
     let code = 0;
 
-    const nlinks = async (inf: NodeInfo) => {
-      if (!inf.isDir) return 1;
-      let n = 2;
-      try {
-        for (const e of await w.base.readdir(inf.path)) {
-          const s = await w.info(inf.path === "/" ? "/" + e : inf.path + "/" + e);
-          if (s?.isDir) n++;
-        }
-      } catch {
-        /* пусто */
-      }
-      return n;
-    };
+    const nlinks = (inf: NodeInfo) => linkCount(w, inf);
     const dirSize = async (inf: NodeInfo) => {
       try {
         const n = (await w.base.readdir(inf.path)).reduce((s, e) => s + e.length + 9, 6);
@@ -136,13 +140,17 @@ export function lsCommand(w: World): Command {
       }
     };
 
+    const isBroken = async (inf: NodeInfo) => inf.isLink && !(await w.info(inf.path, true));
+    const inoOf = (inf: NodeInfo) => String(w.inodes.ino(inf.path));
     const longLines = async (entries: { name: string; inf: NodeInfo }[]) => {
       const rows: string[][] = [];
+      const inoW = f.has("i") ? Math.max(...entries.map((e) => inoOf(e.inf).length)) : 0;
       for (const { name, inf } of entries) {
         const size = inf.isDir ? await dirSize(inf) : inf.size;
         const user = w.userByUid(inf.uid)?.name ?? String(inf.uid);
         const group = w.groupByGid(inf.gid)?.name ?? String(inf.gid);
-        let shown = colorize(w, inf, name);
+        const broken = await isBroken(inf);
+        let shown = colorize(w, inf, name, broken);
         if (inf.isLink) {
           try {
             shown += " -> " + (await w.base.readlink(inf.path));
@@ -151,7 +159,7 @@ export function lsCommand(w: World): Command {
           }
         }
         rows.push([
-          modeString(inf) + ".",
+          (f.has("i") ? inoOf(inf).padStart(inoW) + " " : "") + modeString(inf) + ".",
           String(await nlinks(inf)),
           user,
           group,
@@ -180,7 +188,9 @@ export function lsCommand(w: World): Command {
     const render = async (entries: { name: string; inf: NodeInfo }[]) => {
       if (!entries.length) return "";
       if (long) return (await longLines(entries)) + "\n";
-      const names = entries.map((e) => colorize(w, e.inf, e.name));
+      const inoW = f.has("i") ? Math.max(...entries.map((e) => inoOf(e.inf).length)) : 0;
+      const names: string[] = [];
+      for (const e of entries) names.push((f.has("i") ? inoOf(e.inf).padStart(inoW) + " " : "") + colorize(w, e.inf, e.name, await isBroken(e.inf)));
       if (w.tty && !f.has("1")) return columns(names, w.cols);
       return names.join("\n") + "\n";
     };
@@ -260,12 +270,6 @@ function statTime(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}000000 +0000`;
 }
 
-function inode(path: string): number {
-  let h = 5381;
-  for (const c of path) h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
-  return 100000 + (h % 9000000);
-}
-
 export function statCommand(w: World): Command {
   return defineCommand("stat", async (args, ctx) => {
     const p = parseArgs(args, { short: "LcF", withValue: ["c", "format", "printf"], long: { dereference: "L" } });
@@ -289,9 +293,12 @@ export function statCommand(w: World): Command {
       }
       const user = w.userByUid(inf.uid)?.name ?? "UNKNOWN";
       const group = w.groupByGid(inf.gid)?.name ?? "UNKNOWN";
+      const links = await linkCount(w, inf);
+      const linkTargets = new Map<string, string>();
+      if (inf.isLink) linkTargets.set(t, `'${t}' -> '${await w.base.readlink(inf.path)}'`);
       if (fmt !== undefined) {
         out +=
-          fmt.replace(/%([aAuUgGnsFyYix%])/g, (_, c: string) => {
+          fmt.replace(/%([aAuUgGnNsFyYixh%])/g, (_, c: string) => {
             switch (c) {
               case "a":
                 return inf.mode.toString(8);
@@ -307,6 +314,10 @@ export function statCommand(w: World): Command {
                 return group;
               case "n":
                 return t;
+              case "N":
+                return linkTargets.get(t) ?? `'${t}'`;
+              case "h":
+                return String(links);
               case "s":
                 return String(inf.size);
               case "F":
@@ -316,7 +327,7 @@ export function statCommand(w: World): Command {
               case "Y":
                 return String(Math.floor(inf.mtime.getTime() / 1000));
               case "i":
-                return String(inode(inf.path));
+                return String(w.inodes.ino(inf.path));
               case "x":
                 return statTime(inf.mtime);
               default:
@@ -330,7 +341,7 @@ export function statCommand(w: World): Command {
       const ts = statTime(inf.mtime);
       out += `  File: ${name}\n`;
       out += `  Size: ${String(inf.size).padEnd(10)}\tBlocks: ${String(blocks).padEnd(10)} IO Block: 4096   ${fileType(inf)}\n`;
-      out += `Device: fd00h/64768d\tInode: ${String(inode(inf.path)).padEnd(11)} Links: ${inf.isDir ? 2 : 1}\n`;
+      out += `Device: fd00h/64768d\tInode: ${String(w.inodes.ino(inf.path)).padEnd(11)} Links: ${links}\n`;
       out += `Access: (${inf.mode.toString(8).padStart(4, "0")}/${modeString(inf)})  Uid: (${String(inf.uid).padStart(5)}/${user.padStart(8)})   Gid: (${String(inf.gid).padStart(5)}/${group.padStart(8)})\n`;
       out += `Context: unconfined_u:object_r:${inf.path.startsWith("/home") ? "user_home_t" : inf.path.startsWith("/tmp") ? "user_tmp_t" : "default_t"}:s0\n`;
       out += `Access: ${ts}\nModify: ${ts}\nChange: ${ts}\n Birth: ${ts}\n`;

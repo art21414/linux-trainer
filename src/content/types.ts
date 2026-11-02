@@ -1,56 +1,23 @@
 import type { World } from "../engine/world";
 import type { Shell } from "../engine/shell";
 
-/** Карточка теории. В body: **жирный**, `код`, пустая строка — новый абзац. */
-export interface TheoryEx {
-  type: "theory";
-  title: string;
-  body: string;
-  code?: string;
-}
-
-/** Выбор одного ответа. kind меняет заголовок: обычный вопрос / предскажи вывод / найди ошибку. */
-export interface ChoiceEx {
-  type: "choice";
-  kind?: "choice" | "predict" | "bug";
-  prompt: string;
-  code?: string;
-  options: string[];
-  answer: number;
-  explain?: string;
-}
-
-/** Заполни пропуск: в template место пропуска — ___ */
-export interface FillEx {
-  type: "fill";
-  prompt: string;
-  template: string;
-  options: string[];
-  answer: number;
-  explain?: string;
-}
-
-/** Собери команду из плиток. answer — правильный порядок, extra — лишние плитки. */
-export interface TilesEx {
-  type: "tiles";
-  prompt: string;
-  answer: string[];
-  extra: string[];
-  /** Другие верные варианты (последовательности плиток). */
-  accept?: string[][];
-  explain?: string;
-}
-
 export interface CheckCtx {
   world: World;
   shell: Shell;
 }
 
-/** true — выполнено; строка — «почти»: подсказка, что не так (показывается Палычем). */
+/** true — выполнено; false — нет; строка — «почти»: подсказка, что не так (показывается Палычем). */
 export type CheckResult = boolean | string;
 
+interface ExBase {
+  /** Уникальный глобально, стабильный (на нём прогресс и повторение). Формат: `<тема>-<набор>-<N>`, напр. `perm-1-03`. */
+  id: string;
+  /** Якорь подтемы из theory.md темы (`## Название {#anchor}`): кнопка «Теория» открывает её. */
+  theory?: string;
+}
+
 /** Задание в терминале. Проверяется по итоговому состоянию мира, а не по тексту команды. */
-export interface TerminalEx {
+export interface TerminalEx extends ExBase {
   type: "terminal";
   prompt: string;
   user?: string;
@@ -58,23 +25,55 @@ export interface TerminalEx {
   setup?: (w: World) => Promise<void>;
   check: (c: CheckCtx) => Promise<CheckResult>;
   hint: string;
+  /** Рабочее решение: строки через \n выполняются по очереди. Тест его прогоняет. */
   solution: string;
+  /** Альтернативные верные решения (по 1–3). Тест: после каждого check === true. */
+  accept?: string[];
+  /** Неверные решения. Тест: после каждого check !== true. */
+  reject?: string[];
+  /** Короткий разбор после выполнения: почему так и какая ловушка. */
+  explain?: string;
 }
 
-export type Exercise = TheoryEx | ChoiceEx | FillEx | TilesEx | TerminalEx;
+/** Выбор одного ответа — только неочевидное. kind: предскажи вывод / найди ошибку / тонкий выбор. */
+export interface ChoiceEx extends ExBase {
+  type: "choice";
+  kind: "predict" | "bug" | "choice";
+  prompt: string;
+  code?: string;
+  options: string[];
+  answer: number;
+  explain: string;
+}
 
-export interface Lesson {
+export type Exercise = TerminalEx | ChoiceEx;
+
+export interface PracticeSet {
+  /** Уникальный в пределах темы, напр. "1", "2". Для зачёта — "exam". */
   id: string;
   title: string;
-  icon: string;
   exercises: Exercise[];
 }
 
-export interface Unit {
+export interface Topic {
+  /** Глобально уникальный короткий id, напр. "perm". Используется в прогрессе. */
+  id: string;
+  /** Порядковый номер темы в курсе. */
+  n: number;
+  title: string;
+  /** Одна строка: о чём тема. */
+  summary: string;
+  level: "base" | "mid";
+  /** Сырой markdown (import ... from "./theory.md?raw"). */
+  theory: string;
+  /** Наборы практики по 5–8 заданий. */
+  sets: PracticeSet[];
+  /** Зачёт: 4–6 показательных заданий. */
+  exam: PracticeSet;
+}
+
+export interface Section {
   id: string;
   title: string;
-  subtitle: string;
-  color: string;
-  shade: string;
-  lessons: Lesson[];
+  topics: Topic[];
 }

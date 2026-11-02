@@ -1,19 +1,43 @@
-// Прохождение урока: очередь заданий, проверка, плашка результата, повтор ошибок.
-import type { ChoiceEx, Exercise, FillEx, Lesson, TerminalEx, TheoryEx, TilesEx } from "../content/types";
+// Практика: очередь заданий (набор, зачёт или повторение), проверка, разбор, повтор ошибок, лист с теорией.
+import type { ChoiceEx, Exercise, TerminalEx } from "../content/types";
+import { topicById } from "../content/topics";
+import { parseTheory, renderMarkdown } from "../content/theory";
+import type { ReviewItem } from "../state/review";
+import { openSheet } from "./sheet";
+import type { SheetHandle } from "./sheet";
+import { icon } from "./icons";
+import type { IconName } from "./icons";
 import { PHRASES, pick } from "../content/palych";
 import { createServer, Shell } from "../engine/shell";
 import type { RunResult } from "../engine/shell";
-import { logUnknown, noteMistake } from "../state/progress";
-import { codeHtml, confirmModal, esc, h, md, mdInline, vibrate } from "./dom";
+import { clearMistake, logUnknown, markRead, noteMistake } from "../state/progress";
+import { codeHtml, confirmModal, esc, h, mdInline, toast, vibrate } from "./dom";
 import { Mascot } from "./mascot";
 import { play } from "./sound";
 import { TerminalView } from "./terminal";
 
+export type LessonKind = "set" | "exam" | "review";
+
+/** Что проходим: набор, зачёт темы или повторение ошибок (задания могут быть из разных тем). */
+export interface LessonSpec {
+  kind: LessonKind;
+  /** Тема набора/зачёта; для повторения null. */
+  topicId: string | null;
+  /** Id набора для прогресса ("exam" для зачёта, "review" для повторения). */
+  setId: string;
+  title: string;
+  items: ReviewItem[];
+}
+
 export interface LessonOutcome {
-  lesson: Lesson;
+  spec: LessonSpec;
   accuracy: number;
   mistakes: number;
   seconds: number;
+  /** Подтемы заданий, где были ошибки (без повторов). */
+  weak: { topicId: string; anchor: string }[];
+  /** Повторение: сколько ошибок исправлено с первого раза. */
+  fixed: number;
 }
 
 interface View {
@@ -25,18 +49,16 @@ interface View {
   destroy?(): void;
 }
 
-const KIND_LABEL: Record<string, [string, string]> = {
-  choice: ["❓", "Выбери ответ"],
-  predict: ["🔮", "Предскажи вывод"],
-  bug: ["🐞", "Найди ошибку"],
-  fill: ["✏️", "Заполни пропуск"],
-  tiles: ["🧩", "Собери команду"],
-  terminal: ["💻", "Задание в терминале"],
+const KIND_LABEL: Record<string, [IconName, string]> = {
+  choice: ["dot", "Выбери ответ"],
+  predict: ["play", "Предскажи вывод"],
+  bug: ["warning", "Найди ошибку"],
+  terminal: ["terminal", "Задание в терминале"],
 };
 
 function kindHead(kind: string): HTMLElement {
-  const [icon, label] = KIND_LABEL[kind];
-  return h("div", { class: `ex-kind ${kind}` }, icon, " ", label);
+  const [ico, label] = KIND_LABEL[kind];
+  return h("div", { class: `ex-kind ex-kind--${kind}` }, icon(ico, { size: 16 }), " ", label);
 }
 
 const isMono = (s: string) => !/[а-яё]/i.test(s);
@@ -52,7 +74,7 @@ function shuffle<T>(arr: T[]): T[] {
 
 // ---------- представления заданий ----------
 
-function choiceView(ex: ChoiceEx, onChange: () => void): View {
+function choiceView(ex: ChoiceEx, onChange: () => void, onActivity?: () => void): View {
   let sel = -1;
   const order = shuffle(ex.options.map((_, i) => i));
   const btns: HTMLButtonElement[] = [];
@@ -65,6 +87,7 @@ function choiceView(ex: ChoiceEx, onChange: () => void): View {
       btns.forEach((x) => x.classList.remove("sel"));
       b.classList.add("sel");
       play("tap");
+      onActivity?.();
       onChange();
     });
     b.dataset.idx = String(idx);
@@ -74,7 +97,7 @@ function choiceView(ex: ChoiceEx, onChange: () => void): View {
   const el = h(
     "div",
     { class: "ex" },
-    kindHead(ex.kind ?? "choice"),
+    kindHead(ex.kind),
     h("h2", { html: mdInline(ex.prompt) }),
     ex.code ? h("pre", { class: "codeblock", html: codeHtml(ex.code) }) : null,
     opts,
@@ -94,126 +117,45 @@ function choiceView(ex: ChoiceEx, onChange: () => void): View {
   };
 }
 
-function fillView(ex: FillEx, onChange: () => void): View {
-  let sel = -1;
-  const [before, after] = ex.template.split("___");
-  const gap = h("span", { class: "gap empty" }, "____");
-  const code = h("pre", { class: "codeblock fill-code" }, h("span", { class: "ps" }, "$ "), before, gap, after ?? "");
-  const bank = h("div", { class: "bank" });
-  const tiles: HTMLButtonElement[] = [];
-  shuffle(ex.options.map((_, i) => i)).forEach((idx) => {
-    const t = h("button", { class: "tile" }, ex.options[idx]);
-    t.addEventListener("click", () => {
-      sel = idx;
-      gap.textContent = ex.options[idx];
-      gap.classList.remove("empty");
-      tiles.forEach((x) => x.classList.remove("ghost"));
-      t.classList.add("ghost");
-      play("tap");
-      onChange();
-    });
-    tiles.push(t);
-    bank.append(t);
-  });
-  const el = h("div", { class: "ex" }, kindHead("fill"), h("h2", { html: mdInline(ex.prompt) }), code, bank);
-  return {
-    el,
-    ready: () => sel >= 0,
-    check: () => {
-      tiles.forEach((t) => (t.disabled = true));
-      return { ok: sel === ex.answer, answer: ex.template.replace("___", ex.options[ex.answer]) };
-    },
-  };
-}
-
-function tilesView(ex: TilesEx, onChange: () => void): View {
-  const line = h("div", { class: "answer-line" }, h("span", { class: "ps" }, "$"));
-  const bank = h("div", { class: "bank" });
-  const chosen: { word: string; src: HTMLButtonElement; el: HTMLButtonElement }[] = [];
-  let locked = false;
-  for (const word of shuffle([...ex.answer, ...ex.extra])) {
-    const src = h("button", { class: "tile" }, word);
-    src.addEventListener("click", () => {
-      if (locked || src.classList.contains("ghost")) return;
-      src.classList.add("ghost");
-      const el = h("button", { class: "tile" }, word);
-      const item = { word, src, el };
-      el.addEventListener("click", () => {
-        if (locked) return;
-        el.remove();
-        src.classList.remove("ghost");
-        chosen.splice(chosen.indexOf(item), 1);
-        play("tap");
-        onChange();
-      });
-      chosen.push(item);
-      line.append(el);
-      play("tap");
-      onChange();
-    });
-    bank.append(src);
-  }
-  const el = h("div", { class: "ex" }, kindHead("tiles"), h("h2", { html: mdInline(ex.prompt) }), line, bank);
-  return {
-    el,
-    ready: () => chosen.length > 0,
-    check: () => {
-      locked = true;
-      const got = chosen.map((c) => c.word).join(" ");
-      const ok = [ex.answer, ...(ex.accept ?? [])].some((a) => a.join(" ") === got);
-      return { ok, answer: ex.answer.join(" ") };
-    },
-  };
-}
-
-function theoryView(ex: TheoryEx): View {
-  const el = h(
-    "div",
-    { class: "ex" },
-    h(
-      "div",
-      { class: "theory-card" },
-      h("span", { class: "theory-badge" }, "📖 Теория"),
-      h("h2", {}, ex.title),
-      h("div", { class: "md", html: md(ex.body) }),
-      ex.code ? h("pre", { class: "codeblock", html: codeHtml(ex.code) }) : null,
-    ),
-  );
-  return { el, ready: () => true, check: () => ({ ok: true }) };
-}
-
 // ---------- экран урока ----------
 
-export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: LessonOutcome) => void, onExit: () => void): () => void {
+export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: LessonOutcome) => void, onExit: () => void): () => void {
   const started = Date.now();
-  const queue = lesson.exercises.map((_, i) => i);
-  const total = lesson.exercises.length;
+  const total = spec.items.length;
+  const queue = spec.items.map((_, i) => i);
   let solved = 0;
   let mistakes = 0;
+  let fixed = 0;
   let combo = 0;
+  let cur: ReviewItem | null = null;
   let view: View | null = null;
   let termCleanup: (() => void) | null = null;
+  let theorySheet: SheetHandle | null = null;
+  /** Палыч, который сейчас на экране задания (для реакций на «Теорию» и «долго думает»). */
+  let live: Mascot | null = null;
   const failed = new Set<number>();
 
   const bar = h("i", { style: { width: "0%" } });
   const comboEl = h("div", { class: "combo" });
-  const close = h("button", { class: "x", "aria-label": "Выйти" }, "✕");
+  const close = h("button", { class: "x", "aria-label": "Выйти" }, icon("close", { size: 22 }));
   close.addEventListener("click", async () => {
-    if (solved === 0 || (await confirmModal("Выйти из урока?", "Прогресс этого урока пропадёт. Палыч расстроится.", "Выйти", "Остаться"))) onExit();
+    if (solved === 0 || (await confirmModal("Выйти?", "Прогресс этого прохождения пропадёт. Палыч расстроится.", "Выйти", "Остаться"))) onExit();
   });
-  const top = h("div", { class: "lesson-top" }, close, h("div", { class: "progress" }, bar), comboEl);
+  const theoryBtn = h("button", { class: "theory-btn", hidden: "" }, icon("book", { size: 18 }), h("span", {}, "Теория"));
+  const top = h("div", { class: "lesson-top" }, close, h("div", { class: "progress" }, bar), comboEl, theoryBtn);
   const body = h("div", { class: "scroll" });
   const checkBtn = h("button", { class: "btn" }, "Проверить");
   const footerRow = h("div", { class: "row" }, checkBtn);
   const sheetMascot = new Mascot({ size: "sm", bubble: false });
   const sheetTitle = h("h3", {});
-  const sheetIco = h("div", { class: "ico" });
+  const sheetIco = h("div", { class: "sheet-ico" });
+  const sheetCode = h("span", { class: "sheet-code" });
   const sheetBody = h("div", { class: "sheet-body" });
   const sheetBtn = h("button", { class: "btn" }, "Продолжить");
   const sheet = h(
     "div",
     { class: "sheet" },
-    h("div", { class: "sheet-head" }, sheetIco, sheetTitle, h("div", { style: { marginLeft: "auto" } }, sheetMascot.el)),
+    h("div", { class: "sheet-head" }, sheetIco, h("div", { class: "sheet-titles" }, sheetCode, sheetTitle), sheetMascot.el),
     sheetBody,
     sheetBtn,
   );
@@ -223,87 +165,117 @@ export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: Less
 
   const updateBar = () => {
     bar.style.width = `${Math.max(4, (solved / total) * 100)}%`;
-    comboEl.textContent = combo >= 3 ? `🔥${combo}` : "";
+    comboEl.replaceChildren(...(combo >= 3 ? [icon("flame", { size: 16 }), String(combo)] : []));
   };
 
   const showSheet = (ok: boolean, title: string, html: string) => {
     sheet.className = `sheet show ${ok ? "ok" : "bad"}`;
-    sheetIco.textContent = ok ? "✓" : "✕";
+    sheetIco.replaceChildren(icon(ok ? "check" : "cross", { size: 20 }));
+    sheetCode.textContent = ok ? "OK exit 0" : "FAIL exit 1";
     sheetTitle.textContent = title;
     sheetBody.innerHTML = html;
     sheetBtn.className = `btn ${ok ? "" : "red"}`;
-    sheetMascot.react(ok ? "correct" : "wrong", undefined, false);
+    sheetMascot.react(ok ? (combo > 0 && combo % 3 === 0 ? "combo" : "correct") : "wrong", undefined, false);
     setTimeout(() => sheetBtn.focus({ preventScroll: true }), 50);
   };
 
+  const explainHtml = (ex: Exercise) => (ex.explain ? `<span class="explain">${esc(ex.explain)}</span>` : "");
+
+  /** Верный ответ: в повторении с первой попытки снимаем ошибку. */
+  const onSolved = (item: ReviewItem, idx: number) => {
+    solved++;
+    if (!failed.has(idx)) {
+      combo++;
+      if (spec.kind === "review") {
+        clearMistake(item.topicId, item.ex.id);
+        fixed++;
+      }
+    }
+  };
+  const onFailed = (item: ReviewItem, idx: number) => {
+    mistakes++;
+    combo = 0;
+    failed.add(idx);
+    noteMistake(item.topicId, item.ex.id);
+  };
+
   const finish = () => {
-    const graded = lesson.exercises.filter((e) => e.type !== "theory").length;
-    const accuracy = graded ? Math.max(0, (graded - failed.size) / graded) : 1;
-    onDone({ lesson, accuracy, mistakes, seconds: Math.round((Date.now() - started) / 1000) });
+    const accuracy = total ? Math.max(0, (total - failed.size) / total) : 1;
+    const weak: LessonOutcome["weak"] = [];
+    for (const i of failed) {
+      const { topicId, ex } = spec.items[i];
+      if (ex.theory && !weak.some((w) => w.topicId === topicId && w.anchor === ex.theory)) weak.push({ topicId, anchor: ex.theory });
+    }
+    onDone({ spec, accuracy, mistakes, seconds: Math.round((Date.now() - started) / 1000), weak, fixed });
+  };
+
+  // ----- теория поверх задания -----
+  const section = (item: ReviewItem) => {
+    const t = topicById(item.topicId);
+    return t && item.ex.theory ? parseTheory(t.theory).sections.find((s) => s.anchor === item.ex.theory) : undefined;
+  };
+  theoryBtn.onclick = () => {
+    if (!cur || theorySheet) return;
+    const sec = section(cur);
+    if (!sec) return toast("Для этого задания нет подтемы");
+    (document.activeElement as HTMLElement | null)?.blur();
+    markRead(cur.topicId, sec.anchor);
+    live?.react("theoryOpen", undefined, false);
+    theorySheet = openSheet(root, sec.title, renderMarkdown(sec.body), () => (theorySheet = null));
   };
 
   const next = () => {
     view?.destroy?.();
     termCleanup?.();
     termCleanup = null;
+    live = null;
     sheet.className = "sheet";
     if (!queue.length) return finish();
     const idx = queue.shift()!;
-    const ex = lesson.exercises[idx];
+    const item = spec.items[idx];
+    const ex = item.ex;
+    cur = item;
+    theoryBtn.hidden = !section(item);
     body.innerHTML = "";
     body.scrollTop = 0;
-    if (ex.type === "terminal") return showTerminal(ex, idx);
+    if (ex.type === "terminal") return showTerminal(item, ex, idx);
     body.className = "scroll";
     const onChange = () => (checkBtn.disabled = !view!.ready());
-    view = makeView(ex, onChange);
+    const thinker = new Mascot({ size: "sm" });
+    live = thinker;
+    thinker.armSlow();
+    view = choiceView(ex, onChange, () => thinker.activity());
+    view.el.append(thinker.el);
+    const baseDestroy = view.destroy;
+    view.destroy = () => {
+      baseDestroy?.();
+      thinker.destroy();
+    };
     body.append(view.el);
     footerRow.replaceChildren(checkBtn);
-    checkBtn.textContent = ex.type === "theory" ? "Дальше" : "Проверить";
+    checkBtn.textContent = "Проверить";
     checkBtn.className = "btn";
     checkBtn.disabled = !view.ready();
     checkBtn.onclick = () => {
       if (!view || !view.ready()) return;
-      if (ex.type === "theory") {
-        solved++;
-        updateBar();
-        return next();
-      }
       const r = view.check();
       checkBtn.disabled = true;
       if (r.ok) {
-        solved++;
-        combo++;
+        onSolved(item, idx);
         play("right");
-        showSheet(true, pick(["Отлично!", "Верно!", "Так держать!", "Точно!"]), `«${esc(pick(PHRASES.correct))}» — Палыч`);
+        showSheet(true, pick(["Отлично!", "Верно!", "Так держать!", "Точно!"]), `${explainHtml(ex) || `«${esc(pick(PHRASES.correct))}» — Палыч`}`);
       } else {
-        mistakes++;
-        combo = 0;
-        failed.add(idx);
-        noteMistake(`${lesson.id}#${idx}`);
-        queue.push(idx); // повторим в конце урока
+        onFailed(item, idx);
+        queue.push(idx); // повторим в конце
         play("wrong");
         vibrate([40, 40, 60]);
-        const explain = "explain" in ex && ex.explain ? `<span class="explain">${esc(ex.explain)}</span>` : "";
-        showSheet(false, "Неправильно", `Правильный ответ:<span class="answer">${esc(r.answer ?? "")}</span>${explain}`);
+        showSheet(false, "Неправильно", `Правильный ответ:<span class="answer">${esc(r.answer ?? "")}</span>${explainHtml(ex)}`);
       }
       updateBar();
     };
   };
 
-  const makeView = (ex: Exercise, onChange: () => void): View => {
-    switch (ex.type) {
-      case "choice":
-        return choiceView(ex, onChange);
-      case "fill":
-        return fillView(ex, onChange);
-      case "tiles":
-        return tilesView(ex, onChange);
-      default:
-        return theoryView(ex as TheoryEx);
-    }
-  };
-
-  const showTerminal = async (ex: TerminalEx, idx: number) => {
+  const showTerminal = async (item: ReviewItem, ex: TerminalEx, idx: number) => {
     body.className = "ex term-ex";
     const w = await createServer();
     if (ex.setup) await ex.setup(w);
@@ -315,6 +287,12 @@ export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: Less
     });
     const term = new TerminalView(shell);
     const mascot = new Mascot({ size: "sm" });
+    live = mascot;
+    mascot.armSlow();
+    term.onTyping = () => {
+      mascot.setMood("typing", 1500);
+      mascot.activity();
+    };
     const near = h("span", { class: "near" });
     const hintBox = h("div", { class: "hint-box", style: { display: "none" } });
     const card = h("div", { class: "task-card" }, h("span", { html: mdInline(ex.prompt) }), near);
@@ -324,42 +302,38 @@ export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: Less
 
     let hintLevel = 0;
     let done = false;
-    const hintBtn = h("button", { class: "btn ghost small" }, "💡 Подсказка");
+    const hintBtn = h("button", { class: "btn ghost small" }, icon("hint", { size: 18 }), " Подсказка");
     hintBtn.onclick = () => {
       hintLevel++;
       hintBox.style.display = "";
       if (hintLevel === 1) {
-        hintBox.innerHTML = `💡 ${esc(ex.hint)}`;
-        hintBtn.textContent = "👀 Показать решение";
+        hintBox.innerHTML = esc(ex.hint);
+        hintBtn.replaceChildren(icon("known", { size: 18 }), " Показать решение");
         mascot.react("hint");
       } else {
         hintBox.innerHTML = `Решение (одно из возможных):<br><code>${esc(ex.solution).replace(/\n/g, "<br>")}</code>`;
         hintBtn.style.display = "none";
         mascot.say("Перепиши руками. Пальцы тоже должны запомнить.");
-        if (!failed.has(idx)) {
-          failed.add(idx);
-          mistakes++;
-          noteMistake(`${lesson.id}#${idx}`);
-        }
+        if (!failed.has(idx)) onFailed(item, idx);
       }
     };
     footerRow.replaceChildren(hintBtn);
 
     term.onResult = async (r: RunResult) => {
       if (done) return;
-      reactToCommand(mascot, r);
+      mascot.activity();
+      reactToCommand(mascot, r, shell.user.name);
       const res = await ex.check({ world: w, shell });
       if (res === true) {
         done = true;
-        solved++;
-        if (!failed.has(idx)) combo++;
+        onSolved(item, idx);
         updateBar();
         play("right");
         (document.activeElement as HTMLElement | null)?.blur();
         mascot.react("correct");
-        showSheet(true, "Сервер принял!", `Проверка состояния пройдена. «${esc(pick(PHRASES.correct))}»`);
+        showSheet(true, "Сервер принял!", `Проверка состояния пройдена. «${esc(pick(PHRASES.correct))}»${explainHtml(ex)}`);
       } else if (typeof res === "string") {
-        near.textContent = "🟡 " + res;
+        near.textContent = "Почти: " + res;
         mascot.react("near", "think", false);
         mascot.say(res);
       } else {
@@ -378,6 +352,7 @@ export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: Less
   next();
 
   return () => {
+    theorySheet?.destroy();
     view?.destroy?.();
     termCleanup?.();
     sheetMascot.destroy();
@@ -385,7 +360,7 @@ export function renderLesson(root: HTMLElement, lesson: Lesson, onDone: (o: Less
 }
 
 /** Реакция Палыча на результат команды. */
-export function reactToCommand(m: Mascot, r: RunResult): void {
+export function reactToCommand(m: Mascot, r: RunResult, user?: string): void {
   switch (r.kind) {
     case "danger":
       vibrate([80, 40, 80, 40, 120]);
@@ -395,9 +370,9 @@ export function reactToCommand(m: Mascot, r: RunResult): void {
     case "unsupported":
       return m.react("unsupported");
     case "sudo":
-      return m.react("sudo");
+      return m.react(user === "root" ? "root" : "sudo");
     case "su":
-      return m.react("su");
+      return m.react(user === "root" ? "root" : "su");
     case "clear":
       return m.react("clear");
     case "error":

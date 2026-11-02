@@ -1,0 +1,66 @@
+/* Токены дизайн-системы «Консоль» (см. docs/design-system.md). Единственный источник значений. */
+:root {
+  /* --- поверхности: тёплый графит, не чёрный --- */
+  --c-bg: #13120f;          /* основа экрана */
+  --c-surface: #1b1a16;     /* панели, строки */
+  --c-surface-2: #24221d;   /* приподнятое: кнопки, поля, лист */
+  --c-term: #0d0c0a;        /* окно терминала — глубже основы */
+  --c-line: #3b3830;        /* рамки, разделители */
+  --c-line-strong: #5a564a; /* активные рамки, тени-«блоки» */
+
+  /* --- текст: «костяная бумага» --- */
+  --c-text: #ece5d3;        /* основной, 14:1 на bg */
+  --c-text-2: #b3ac99;      /* вторичный, 8:1 */
+  --c-muted: #8d8775;       /* подписи, 4.9:1 на bg (минимум для мелкого текста) */
+
+  /* --- акцент: янтарный фосфор (единственный «цвет интерфейса») --- */
+  --c-accent: #f2a03d;
+  --c-accent-press: #c97f22;
+  --c-accent-ink: #1a1206;  /* текст на акценте, 9:1 */
+  --c-accent-soft: rgba(242, 160, 61, .14);
+
+  /* --- семантика: приглушённая, всегда с иконкой/словом --- */
+  --c-ok: #8fb67e;          /* успех (шалфей) */
+  --c-ok-soft: rgba(143, 182, 126, .14);
+  --c-err: #e5675b;         /* ошибка (кирпич-коралл) */
+  --c-err-soft: rgba(229, 103, 91, .14);
+  --c-warn: #d2bd7d;        /* ловушка/внимание (песок) */
+  --c-warn-soft: rgba(210, 189, 125, .13);
+
+  /* --- шрифты --- */
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --f-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --f-pixel: "Pixelify Sans", "IBM Plex Mono", monospace; /* только заголовки/цифры/логотип */
+  --fs-xs: 12px; --fs-sm: 14px; --fs-md: 16px; --fs-lg: 20px; --fs-xl: 28px; --fs-pixel: 22px;
+  --lh-tight: 1.2; --lh-text: 1.5;
+
+  /* --- сетка 4px --- */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+  --gutter: 16px;
+  --tap: 48px;              /* минимальная цель касания */
+
+  /* --- форма: почти прямые углы, как окна 90-х --- */
+  --r-0: 0;
+  --r-1: 2px;
+  --r-2: 4px;
+  --bw: 2px;                /* стандартная рамка */
+  --bw-thin: 1px;
+  --shadow-block: 3px 3px 0 var(--c-line-strong);   /* жёсткая тень без размытия */
+  --shadow-block-accent: 3px 3px 0 var(--c-accent-press);
+  --shadow-press: 0 0 0 transparent;
+
+  /* --- движение --- */
+  --d-fast: 120ms; --d-base: 200ms; --d-slow: 360ms;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --ease-snap: steps(4, end);  /* «дискретное» движение: отсылка к кадрам/пикселям */
+
+  /* --- тонкие намёки на CRT: только фон, текст не трогаем --- */
+  --scanline: repeating-linear-gradient(0deg, rgba(255, 240, 210, .025) 0 1px, transparent 1px 3px);
+  --dither: radial-gradient(rgba(236, 229, 211, .07) 1px, transparent 1.2px) 0 0 / 4px 4px;
+
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --d-fast: 0ms; --d-base: 0ms; --d-slow: 0ms; }
+}

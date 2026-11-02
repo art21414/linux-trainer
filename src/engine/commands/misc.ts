@@ -7,9 +7,9 @@ import { fail } from "../util";
 
 /** Команды, которые есть в RHEL, но тренажёр их пока не умеет. Пополняем по журналу. */
 export const UNSUPPORTED = [
-  "systemctl", "journalctl", "dnf", "yum", "rpm", "ip", "ss", "nmcli", "nmtui", "firewall-cmd", "ping", "curl", "wget",
-  "ps", "top", "htop", "kill", "killall", "pkill", "pgrep", "nice", "renice", "free", "uptime", "df", "mount", "umount",
-  "lsblk", "blkid", "fdisk", "parted", "mkfs", "mkfs.xfs", "mkfs.ext4", "pvcreate", "vgcreate", "lvcreate", "lvextend",
+  "journalctl", "dnf", "yum", "rpm", "ip", "ss", "nmcli", "nmtui", "firewall-cmd", "ping", "curl", "wget",
+  "ps", "top", "htop", "kill", "killall", "pkill", "pgrep", "nice", "renice", "uptime",
+  "fdisk", "parted", "pvcreate", "vgcreate", "lvcreate", "lvextend",
   "getfacl", "setfacl", "getenforce", "setenforce", "semanage", "restorecon", "chcon", "sestatus", "chage", "crontab",
   "at", "tuned-adm", "podman", "ssh", "scp", "rsync", "vi", "vim", "nano", "less", "more", "lsof", "dmesg",
   "last", "w", "who", "lscpu", "timedatectl", "chronyc", "localectl", "visudo", "sudoedit", "newgrp", "gpasswd",
