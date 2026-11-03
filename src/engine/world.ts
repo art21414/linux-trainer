@@ -7,6 +7,8 @@ import { normalize, dirname } from "./path";
 import { InodeTable } from "./inodes";
 import { ProcTable } from "./procs";
 import { Storage } from "./storage";
+import { OpenFiles } from "./openfiles";
+import type { HoldOpts, HoldWho } from "./openfiles";
 
 export interface User {
   name: string;
@@ -70,6 +72,17 @@ export class FsError extends Error {
   }
 }
 
+/** Служба systemd в модели: процесс, который можно перезапустить (`systemctl restart`). */
+export interface ServiceInfo {
+  unit: string;
+  cmd: string;
+  /** Имя пользователя или uid. */
+  user: string | number;
+  pid: number;
+  /** Имя процесса (comm), если оно не совпадает с первым словом команды. */
+  comm?: string;
+}
+
 export interface PendingSu {
   user: string;
   login: boolean;
@@ -102,6 +115,10 @@ export class World {
    * null — ввода нет (тесты, скрипты): вопрос получает ответ «нет» (EOF), как у настоящего rm без tty.
    */
   readLine: ((prompt: string) => Promise<string | null>) | null = null;
+  /** Открытые файлы процессов и удалённые-но-открытые (см. openfiles.ts). */
+  readonly files = new OpenFiles(this);
+  /** Службы (unit без «.service») → процесс; `systemctl restart/stop/start` работает с ними. */
+  readonly services = new Map<string, ServiceInfo>();
   /** Таблица процессов (см. procs.ts). */
   readonly procs: ProcTable = new ProcTable(this);
   /** Диски, ФС, монтирование, учёт места (см. storage.ts). */
@@ -115,6 +132,15 @@ export class World {
 
   constructor() {
     this.fs = this.makeGuardedFs();
+  }
+
+  /**
+   * Для заданий: процесс (pid, имя службы или { service, cmd, user }) держит файл открытым. Если потом файл удалить,
+   * место не освободится (df видит, du — нет), а в /proc/PID/fd/N будет «путь (deleted)».
+   * Пример: `const {pid, fd} = await w.holdOpen("rsyslogd", "/var/log/big.log")`.
+   */
+  holdOpen(who: HoldWho, path: string, opts?: HoldOpts): Promise<{ pid: number; fd: number }> {
+    return this.files.hold(who, path, opts);
   }
 
   // ---------- пользователи и группы ----------
@@ -227,8 +253,17 @@ export class World {
     const p = normalize(path);
     try {
       const s = follow ? await this.base.stat(p) : await this.base.lstat(p);
-      const o = this.owner(p);
-      const t = this.timesOf(p, s.mtime);
+      // stat() по ссылке: владелец, времена и «виртуальный» размер — у цели, а не у самой ссылки
+      let mp = p;
+      if (follow) {
+        try {
+          if ((await this.base.lstat(p)).isSymbolicLink) mp = await this.resolveFinal(p);
+        } catch {
+          /* нет файла */
+        }
+      }
+      const o = this.owner(mp);
+      const t = this.timesOf(mp, s.mtime);
       return {
         path: p,
         mode: s.mode & 0o7777,
@@ -237,7 +272,7 @@ export class World {
         isDir: s.isDirectory,
         isFile: s.isFile,
         isLink: s.isSymbolicLink,
-        size: this.storage.virt.get(p)?.apparent ?? s.size,
+        size: this.storage.virt.get(mp)?.apparent ?? s.size,
         mtime: s.mtime,
         atime: t.atime,
         ctime: t.ctime,
@@ -544,6 +579,7 @@ export class World {
         await guardWriteOrCreate(n);
         if (existed) await w.ensureTimes(n);
         await base.writeFile(n, c as never, o as never);
+        w.storage.virt.delete(n); // запись заменила содержимое: «виртуальный» размер больше не действует
         if (!existed) await onCreate(n, "file");
         else {
           await w.stampChange(n);
@@ -602,8 +638,13 @@ export class World {
         await guardDelete(n);
         const others = (await base.exists(n)) ? w.inodes.names(n).filter((x) => x !== n) : [];
         await w.ensureTimes(dirname(n));
-        await base.rm(p, o as never);
-        dropTree(n);
+        // файл, открытый процессом, «переезжает» в /proc/.held: имя исчезает, место остаётся занятым
+        const target = await w.info(n);
+        const kept = target && !target.isDir ? await w.files.onUnlink(n) : (await w.files.onUnlinkTree(n), false);
+        if (!kept) {
+          await base.rm(p, o as never);
+          dropTree(n);
+        }
         await w.stampDirEntry(dirname(n));
         for (const x of others) await w.stampChange(x); // число ссылок изменилось
       },

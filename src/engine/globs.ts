@@ -94,8 +94,8 @@ async function expandPattern(w: World, cwd: string, pattern: string, dirsOnly: b
  * Подставить раскрытие в слова, которые just-bash раскрывает неверно. Слова с кавычками, `$`, `~`, `{}`, `\` и
  * команды с `case`/`[[` не трогаем. Если совпадений нет — слово остаётся (bash передаст шаблон как есть).
  */
-export async function fixGlobs(w: World, cwd: string, line: string): Promise<string> {
-  if (!/[*?[]/.test(line) || /\[\[|\bcase\b/.test(line)) return line;
+export async function fixGlobs(w: World, cwd: string, line: string, env: Record<string, string> = {}): Promise<string> {
+  if (!/[*?[~]/.test(line) || /\[\[|\bcase\b/.test(line)) return line;
   let out = "";
   let i = 0;
   let wordStart = -1;
@@ -104,7 +104,12 @@ export async function fixGlobs(w: World, cwd: string, line: string): Promise<str
   const flush = async () => {
     if (wordStart < 0) return;
     let rep = word;
-    if (!dirty && /[*?[]/.test(word) && !/^[A-Za-z_]\w*=/.test(word)) {
+    // ~- (OLDPWD) и ~+ (PWD): just-bash их не раскрывает
+    const tilde = /^~([-+])(\/[^'"$`\\*?[]*)?$/.exec(word);
+    if (tilde) {
+      const base = tilde[1] === "-" ? env.OLDPWD : env.PWD;
+      if (base) rep = shq(base + (tilde[2] ?? ""));
+    } else if (!dirty && /[*?[]/.test(word) && !/^[A-Za-z_]\w*=/.test(word)) {
       const dirsOnly = word.length > 1 && word.endsWith("/");
       const literalExists = !dirsOnly && !!(await w.info(resolve(cwd, word)));
       // `.*` в bash 5.1 (RHEL 9) раскрывается и в «.», «..» — классическая ловушка с `rm -r .*`

@@ -352,6 +352,7 @@ export class ProcTable {
     }
     if (sig === 1 && p.handlesHup) {
       p.reloads++;
+      void this.w.files.onHup(p.pid); // демон переоткрывает логи (удалённые файлы закрываются)
       return;
     }
     if (act === "ign") {
@@ -385,6 +386,7 @@ export class ProcTable {
       else c.ppid = 1;
     }
     // сам процесс мог быть зомби-ребёнком — родитель не нужен
+    this.w.files.release(pid); // дескрипторы закрыты — удалённые-но-открытые файлы освобождают место
     const job = this.jobs.find((j) => j.pid === pid);
     if (job) {
       const names: Record<number, string> = { 1: "Hangup", 2: "Interrupt", 3: "Quit", 9: "Killed", 15: "Terminated" };

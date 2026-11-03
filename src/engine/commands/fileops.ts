@@ -7,6 +7,7 @@ import type { NodeInfo, World } from "../world";
 import { basename, dirname, normalize, resolve } from "../path";
 import { bytesToText, errnoText, fail, invalidOpt, parseArgs } from "../util";
 import { modeString } from "./files";
+import { applyMode } from "./perms";
 
 const q = (s: string) => `'${s}'`;
 const tryHelp = (cmd: string) => `Try '${cmd} --help' for more information.`;
@@ -213,9 +214,19 @@ export function rmCommand(w: World): Command {
         continue;
       }
       if (name.endsWith("/")) {
-        // `rm l/` для ссылки на каталог: rmdir-семантика
+        // `rm l/` для ссылки на каталог: rmdir-семантика. С -r GNU rm сначала удаляет СОДЕРЖИМОЕ цели, потом жалуется на саму ссылку
         const target = inf.isLink ? await w.info(abs, true) : null;
-        bad(`cannot remove ${q(name)}: ${target?.isDir && !recursive ? "Is a directory" : "Not a directory"}`);
+        if (recursive && target?.isDir) {
+          const real = await w.resolveFinal(abs);
+          for (const n of await w.base.readdir(real)) {
+            const cabs = real === "/" ? "/" + n : real + "/" + n;
+            const ci = await w.info(cabs);
+            const shown = name.replace(/\/+$/, "") + "/" + n;
+            if (ci?.isDir) await removeDir(cabs, shown, ci);
+            else if (ci) await removeFile(cabs, shown, ci);
+          }
+        }
+        if (!force) bad(`cannot remove ${q(name)}: ${target?.isDir && !recursive ? "Is a directory" : "Not a directory"}`);
         continue;
       }
       await removeFile(abs, name, inf);
@@ -544,6 +555,9 @@ export function cpCommand(w: World): Command {
       } catch (e) {
         return bad(`cannot create regular file ${q(destShown)}: ${errnoText(e)}`);
       }
+      // файлы с «виртуальным» размером (storage.createFile): копия получает тот же размер
+      const v = w.storage.virt.get(await w.resolveFinal(srcAbs));
+      if (v && !attrOnly) w.storage.virt.set(writeTo, { ...v });
       if (created || preserve.size) await applyAttrs(sinf, writeTo, destShown, created);
       if (preserve.has("links")) linkedDest.set(w.inodes.ino(sinf.path), writeTo);
       shownLine();
@@ -631,6 +645,7 @@ export function mvCommand(w: World): Command {
         continue;
       }
       let backedUp = "";
+      const st = w.storage;
       if (dinf) {
         const dTarget = dinf.isLink ? await w.info(dest, true) : dinf;
         if (sinf.isDir && dTarget && !dTarget.isDir) {
@@ -643,6 +658,13 @@ export function mvCommand(w: World): Command {
         }
         if (mode === "noclobber") continue;
         if (update && dinf.mtime.getTime() >= sinf.mtime.getTime()) continue;
+        if (sinf.isDir && dTarget?.isDir && !(bo.control && bo.control !== "none")) {
+          // rename(2) поверх каталога: пустой — заменяется, непустой — ошибка (XFS отвечает EEXIST, ext4/tmpfs — ENOTEMPTY)
+          if ((await w.base.readdir(dest)).length) {
+            bad(`cannot move ${q(src)} to ${q(destShown)}: ${st.mountFor(dest).fstype === "xfs" ? "File exists" : "Directory not empty"}`);
+            continue;
+          }
+        }
         if (mode === "interactive" && !(await ask.yes(`mv: overwrite ${q(destShown)}? `))) continue;
         if (mode === "default" && ask.tty && me.uid !== 0 && !dinf.isLink && !w.permOn(dinf, "w")) {
           const perm = (dinf.mode & 0o777).toString(8).padStart(4, "0");
@@ -661,6 +683,11 @@ export function mvCommand(w: World): Command {
         }
         dinf = null;
       }
+      // другая файловая система: rename(2) даёт EXDEV, mv копирует (новый inode) и удаляет источник
+      if (st.mountFor(srcAbs).id !== st.mountFor(dirname(dest)).id) {
+        out += await crossDeviceMove(w, srcAbs, src, dest, destShown, verbose, bad);
+        continue;
+      }
       try {
         await w.fs.mv(srcAbs, dest);
       } catch (e) {
@@ -668,6 +695,135 @@ export function mvCommand(w: World): Command {
         continue;
       }
       if (verbose) out += `renamed ${q(src)} -> ${q(destShown)}${backedUp ? ` (backup: ${q(destShown + backedUp.slice(dest.length))})` : ""}\n`;
+    }
+    return { stdout: out, stderr: err, exitCode: code };
+  });
+}
+
+// ---------- mv между файловыми системами ----------
+
+/** Копия дерева (владелец/права/mtime сохраняются, как у mv) и удаление источника. Возвращает вывод -v. */
+async function crossDeviceMove(w: World, srcAbs: string, srcShown: string, destAbs: string, destShown: string, verbose: boolean, bad: (m: string) => void): Promise<string> {
+  let failed = false;
+  const crossLog: string[] = [];
+  const me = w.cur;
+  const copy = async (sAbs: string, sShown: string, dAbs: string, dShown: string): Promise<void> => {
+    const inf = await w.info(sAbs);
+    if (!inf) return;
+    try {
+      if (inf.isLink) {
+        await w.fs.symlink(await w.base.readlink(sAbs), dAbs);
+      } else if (inf.isDir) {
+        await w.fs.mkdir(dAbs);
+        if (verbose) crossLog.push(`created directory ${q(dShown)}\n`);
+        for (const n of await w.fs.readdir(sAbs)) await copy(sAbs === "/" ? "/" + n : sAbs + "/" + n, sShown.replace(/\/+$/, "") + "/" + n, dAbs + "/" + n, dShown.replace(/\/+$/, "") + "/" + n);
+      } else {
+        await w.fs.writeFile(dAbs, await w.fs.readFileBuffer(sAbs));
+        const v = w.storage.virt.get(sAbs);
+        if (v) w.storage.virt.set(dAbs, { ...v });
+        if (verbose) crossLog.push(`copied ${q(sShown)} -> ${q(dShown)}\n`);
+      }
+      if (me.uid === 0) w.setOwner(dAbs, inf.uid, inf.gid);
+      if (!inf.isLink) {
+        await w.setMode(dAbs, inf.mode);
+        await w.setTimes(dAbs, { atime: inf.atime, mtime: inf.mtime });
+      }
+    } catch (e) {
+      failed = true;
+      bad(`cannot move ${q(sShown)} to ${q(dShown)}: ${errnoText(e)}`);
+    }
+  };
+  await copy(srcAbs, srcShown, destAbs, destShown);
+  if (failed) return crossLog.join("");
+  // удаление: сначала не-каталоги, потом каталоги (как fts в coreutils)
+  const remove = async (abs: string, shown: string): Promise<void> => {
+    const inf = await w.info(abs);
+    if (!inf) return;
+    if (inf.isDir) {
+      const names = await w.base.readdir(abs);
+      const infos = await Promise.all(names.map(async (n) => ({ n, i: await w.info(abs === "/" ? "/" + n : abs + "/" + n) })));
+      for (const { n, i } of infos) if (i && !i.isDir) await remove(abs + "/" + n, shown.replace(/\/+$/, "") + "/" + n);
+      for (const { n, i } of infos) if (i?.isDir) await remove(abs + "/" + n, shown.replace(/\/+$/, "") + "/" + n);
+      await w.fs.rm(abs);
+      if (verbose) crossLog.push(`removed directory ${q(shown)}\n`);
+    } else {
+      await w.fs.rm(abs);
+      if (verbose) crossLog.push(`removed ${q(shown)}\n`);
+    }
+  };
+  try {
+    await remove(srcAbs, srcShown);
+  } catch (e) {
+    failed = true;
+    bad(`cannot remove ${q(srcShown)}: ${errnoText(e)}`);
+  }
+  return crossLog.join("");
+}
+
+// ---------- mkdir ----------
+
+export function mkdirCommand(w: World): Command {
+  return defineCommand("mkdir", async (args, ctx) => {
+    const p = parseArgs(args, { short: "pvZ", withValue: ["m"], long: { parents: "p", verbose: "v", mode: "m" } });
+    if (p.bad) return fail(invalidOpt("mkdir", p.bad));
+    if (args[args.length - 1] === "-m" || args[args.length - 1] === "--mode") return fail("mkdir: option requires an argument -- 'm'\nTry 'mkdir --help' for more information.");
+    if (!p.rest.length) return fail("mkdir: missing operand\nTry 'mkdir --help' for more information.");
+    const modeSpec = p.values.get("m");
+    let mode: number | null = null;
+    if (modeSpec !== undefined) {
+      // символьный режим считается от 777 минус umask, как у chmod для нового каталога
+      mode = applyMode(modeSpec, 0o777 & ~w.umask, true, w.umask);
+      if (mode === null) return fail(`mkdir: invalid mode '${modeSpec}'`);
+    }
+    const parents = p.flags.has("p");
+    const verbose = p.flags.has("v");
+    let out = "";
+    let err = "";
+    let code = 0;
+    const bad = (name: string, msg: string) => {
+      err += `mkdir: cannot create directory '${name}': ${msg}\n`;
+      code = 1;
+    };
+    const make = async (abs: string, shown: string): Promise<boolean> => {
+      try {
+        await w.fs.mkdir(abs);
+      } catch (e) {
+        bad(shown, errnoText(e));
+        return false;
+      }
+      if (verbose) out += `mkdir: created directory '${shown}'\n`;
+      return true;
+    };
+    for (const name of p.rest) {
+      const abs = resolve(ctx.cwd, name);
+      const existing = await w.info(abs, true);
+      if (existing) {
+        if (!parents || !existing.isDir) bad(name, "File exists");
+        continue;
+      }
+      if (!(await w.canTraverse(abs))) {
+        bad(name, "Permission denied");
+        continue;
+      }
+      if (!parents) {
+        if (!(await w.exists(dirname(abs)))) {
+          bad(name, "No such file or directory");
+          continue;
+        }
+        if (await make(abs, name)) if (mode !== null) await w.setMode(abs, mode);
+        continue;
+      }
+      // -p: создаём недостающие родители (права по umask), -m относится только к последнему каталогу
+      const parts = abs.split("/").filter(Boolean);
+      let cur = "";
+      let ok = true;
+      for (let i = 0; i < parts.length && ok; i++) {
+        cur += "/" + parts[i];
+        if (await w.exists(cur)) continue;
+        const shown = i === parts.length - 1 ? name : name.split("/").slice(0, name.split("/").length - (parts.length - 1 - i)).join("/");
+        ok = await make(cur, shown);
+        if (ok && i === parts.length - 1 && mode !== null) await w.setMode(cur, mode);
+      }
     }
     return { stdout: out, stderr: err, exitCode: code };
   });

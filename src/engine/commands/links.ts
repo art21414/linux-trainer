@@ -35,6 +35,7 @@ export async function canonicalize(w: World, cwd: string, path: string, mode: "f
     if (inf.isLink) {
       if (++hops > 40) return { path: cand, err: "Too many levels of symbolic links" };
       const t = await w.base.readlink(cand);
+      if (w.files.isHeld(t)) return { path: w.files.displayTarget(t) }; // /proc/PID/fd/N удалённого файла: «путь (deleted)»
       rest = t.split("/").filter((x) => x && x !== ".").concat(rest);
       if (t.startsWith("/")) cur = [];
       continue;
@@ -182,6 +183,11 @@ export function lnCommand(w: World): Command {
           code = 1;
           continue;
         }
+        if (!symbolic && w.storage.mountFor(src).id !== w.storage.mountFor(dirname(dest)).id) {
+          err += `ln: ${label} => '${t}': Invalid cross-device link\n`;
+          code = 1;
+          continue;
+        }
         if (symbolic) {
           const target = f.has("r") ? relativePath(dirname(dest), src) : t;
           await w.fs.symlink(target, dest);
@@ -230,7 +236,7 @@ export function readlinkCommand(w: World): Command {
         if (f.has("v")) err += `readlink: ${t}: ${inf ? "Invalid argument" : "No such file or directory"}\n`;
         continue;
       }
-      out += (await w.base.readlink(abs)) + nl;
+      out += w.files.displayTarget(await w.base.readlink(abs)) + nl;
     }
     return { stdout: out, stderr: err, exitCode: code };
   });

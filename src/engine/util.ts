@@ -150,6 +150,7 @@ export function errnoText(e: unknown): string {
   if (m.startsWith("ENOTEMPTY")) return "Directory not empty";
   if (m.startsWith("EROFS")) return "Read-only file system";
   if (m.startsWith("ENOSPC")) return "No space left on device";
+  if (m.startsWith("EXDEV")) return "Invalid cross-device link";
   return m;
 }
 

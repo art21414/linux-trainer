@@ -4,14 +4,19 @@ import type { Command } from "just-bash";
 import { World } from "./world";
 import type { PendingSu, User } from "./world";
 import { basename, resolve } from "./path";
-import { catCommand, lsCommand, statCommand } from "./commands/files";
+import { catCommand, headCommand, lsCommand, statCommand } from "./commands/files";
 import { chgrpCommand, chmodCommand, chownCommand, umaskCommand } from "./commands/perms";
 import { userCommands } from "./commands/users";
 import { miscCommands } from "./commands/misc";
 import { storageCommands } from "./commands/storage";
 import { touchCommand } from "./commands/touch";
-import { cpCommand, mvCommand, rmCommand } from "./commands/fileops";
+import { cpCommand, mkdirCommand, mvCommand, rmCommand } from "./commands/fileops";
 import { linkCommands } from "./commands/links";
+import { findCommand } from "./commands/find";
+import { lsofCommand } from "./commands/lsof";
+import { procCommands } from "./commands/procs";
+import { syncProc } from "./procfs";
+import { registerBaseServices } from "./commands/services";
 import { fixGlobs } from "./globs";
 
 export type RunKind = "ok" | "error" | "notfound" | "unsupported" | "danger" | "sudo" | "clear" | "empty" | "su" | "exit";
@@ -32,6 +37,9 @@ const ERRNO: Record<string, string> = {
   ENOTDIR: "Not a directory",
   EISDIR: "Is a directory",
   ENOTEMPTY: "Directory not empty",
+  ENOSPC: "No space left on device",
+  EROFS: "Read-only file system",
+  EXDEV: "Invalid cross-device link",
 };
 
 /** Привести «сырые» ошибки ФС к виду, как в настоящем Linux. */
@@ -94,6 +102,7 @@ export async function createServer(): Promise<World> {
   await w.write("/var/log/messages", "Oct 26 08:00:01 server1 systemd[1]: Started Session 1 of User root.\n", 0o600);
   await w.write("/var/log/secure", "Oct 26 08:00:01 server1 sshd[812]: Accepted publickey for alice\n", 0o600);
   await w.storage.init(); // диски, ФС, /etc/fstab, /dev, /proc/mounts
+  registerBaseServices(w);
   return w;
 }
 
@@ -108,6 +117,8 @@ export class Shell {
   env: Record<string, string>;
   history: string[] = [];
   private stack: Frame[] = [];
+  /** set -o noclobber включён (переживает строки терминала). */
+  private noclobber = false;
   private names: string[];
 
   constructor(
@@ -125,11 +136,17 @@ export class Shell {
       umaskCommand(world),
       touchCommand(world),
       rmCommand(world),
+      mkdirCommand(world),
+      findCommand(world),
+      headCommand(world),
       cpCommand(world),
       mvCommand(world),
       ...linkCommands(world),
       ...userCommands(world),
       ...miscCommands(world, opts.onUnsupported ?? (() => {})),
+      lsofCommand(world),
+      // ps/pgrep/pkill/pidof/kill/killall — на модели процессов (procs.ts); jobs/nice/top требуют отдельной интеграции с оболочкой
+      ...procCommands(world, opts.onUnsupported ?? (() => {})).filter((c) => ["ps", "pgrep", "pkill", "pidof", "kill", "killall"].includes(c.name)),
       ...storageCommands(world, opts.onUnsupported ?? (() => {})),
     ];
     world.current = "root";
@@ -144,6 +161,7 @@ export class Shell {
       executionLimits: { maxLoopIterations: 5000, maxCommandCount: 5000, maxCallDepth: 50 },
     });
     world.current = user.name;
+    world.shellPid = world.procs.login(user.name);
     this.names = [...new Set([...getCommandNames(), ...custom.map((c) => c.name), "cd", "export", "history", "exit", "type"])]
       .filter((n) => !["python", "python3", "js-exec", "sqlite3", "html-to-markdown", "xan", "rg"].includes(n))
       .sort();
@@ -211,7 +229,12 @@ export class Shell {
     let stderr = "";
     let code = 0;
     try {
-      const r = await this.bash.exec(await fixGlobs(w, this.cwd, trimmed), { cwd: this.cwd, env: this.env });
+      // set -o noclobber живёт между строками (just-bash изолирует каждый exec): запоминаем и подставляем в начало
+      const clobberOn = [...trimmed.matchAll(/(?:^|[;&|]\s*)set\s+(-[a-zA-Z]*C[a-zA-Z]*|\+[a-zA-Z]*C[a-zA-Z]*|-o\s+noclobber|\+o\s+noclobber)(?=\s|;|&|\||$)/g)].map((m) => m[1].startsWith("-"));
+      const prefix = this.noclobber ? "set -C\n" : "";
+      await syncProc(w);
+      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, trimmed, this.env)), { cwd: this.cwd, env: this.env });
+      if (clobberOn.length) this.noclobber = clobberOn[clobberOn.length - 1];
       stdout = r.stdout;
       stderr = r.stderr;
       code = r.exitCode;

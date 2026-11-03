@@ -340,7 +340,7 @@ export function lsCommand(w: World): Command {
       let cell = (align && !q.quoted ? " " : "") + colorize(w, it.inf, q.text, broken, useColor) + indicator(it.inf);
       if (withTarget && it.inf.isLink) {
         try {
-          cell += " -> " + (await w.base.readlink(it.inf.path));
+          cell += " -> " + w.files.displayTarget(await w.base.readlink(it.inf.path));
         } catch {
           /* битая ссылка */
         }
@@ -575,7 +575,7 @@ export function statCommand(w: World): Command {
       const group = w.groupByGid(inf.gid)?.name ?? "UNKNOWN";
       const links = await linkCount(w, inf);
       const blocks = inf.isDir ? 0 : Math.ceil(inf.size / 512 / 8) * 8;
-      const linkTarget = inf.isLink ? await w.base.readlink(inf.path) : "";
+      const linkTarget = inf.isLink ? w.files.displayTarget(await w.base.readlink(inf.path)) : "";
       const context = `unconfined_u:object_r:${inf.path.startsWith("/home") ? "user_home_t" : inf.path.startsWith("/tmp") ? "user_tmp_t" : "default_t"}:s0`;
       if (fmt !== undefined) {
         const text = raw !== undefined ? unescapePrintf(fmt) : fmt;
@@ -630,18 +630,61 @@ export function statCommand(w: World): Command {
   });
 }
 
-/** Свой cat — чтобы корректно писать «Permission denied» и «Is a directory». */
+/** Свой cat — чтобы корректно писать «Permission denied» и «Is a directory» и уметь -A -b -e -E -n -s -t -T -v. */
 export function catCommand(w: World): Command {
   return defineCommand("cat", async (args, ctx) => {
-    const p = parseArgs(args, { short: "nAEbsv", long: { number: "n", "show-all": "A" } });
-    if (p.bad) return fail(`cat: invalid option -- '${p.bad.replace(/^-+/, "")}'\nTry 'cat --help' for more information.`);
+    const p = parseArgs(args, {
+      short: "AbeEnstTuv",
+      long: { "show-all": "A", "number-nonblank": "b", "show-ends": "E", number: "n", "squeeze-blank": "s", "show-tabs": "T", "show-nonprinting": "v" },
+      digits: false,
+    });
+    if (p.bad) return fail(invalidOpt("cat", p.bad));
+    const f = p.flags;
+    const showEnds = f.has("A") || f.has("E") || f.has("e");
+    const showTabs = f.has("A") || f.has("T") || f.has("t");
+    const showNp = f.has("A") || f.has("v") || f.has("e") || f.has("t");
+    const numberNonBlank = f.has("b");
+    const number = f.has("n") && !numberNonBlank;
+    const squeeze = f.has("s");
+    const plainCopy = !(showEnds || showTabs || showNp || numberNonBlank || number || squeeze);
     const targets = p.rest.length ? p.rest : ["-"];
     let out = "";
     let err = "";
     let code = 0;
+    let lineNo = 0;
+    let prevBlank = false;
+    const enc = new TextEncoder();
+    const render = (text: string): string => {
+      if (plainCopy) return text;
+      const lines = text.split("\n");
+      const endsWithNl = text.endsWith("\n");
+      if (endsWithNl) lines.pop();
+      const res: string[] = [];
+      lines.forEach((ln, i) => {
+        const blank = ln === "";
+        if (squeeze && blank && prevBlank) return;
+        prevBlank = blank;
+        let body = "";
+        if (showNp || showTabs) {
+          for (const byte of enc.encode(ln)) {
+            if (byte === 9) body += showTabs ? "^I" : "\t";
+            else if (showNp && byte < 32) body += "^" + String.fromCharCode(byte + 64);
+            else if (showNp && byte === 127) body += "^?";
+            else if (showNp && byte >= 128) body += "M-" + (byte - 128 < 32 ? "^" + String.fromCharCode(byte - 128 + 64) : byte - 128 === 127 ? "^?" : String.fromCharCode(byte - 128));
+            else body += String.fromCharCode(byte);
+          }
+          if (!showNp) body = bytesToText(body); // без -v многобайтные символы остаются как есть
+        } else body = ln;
+        const hasNl = i < lines.length - 1 || endsWithNl;
+        let prefix = "";
+        if (numberNonBlank ? !blank : number) prefix = `${String(++lineNo).padStart(6)}\t`;
+        res.push(prefix + body + (showEnds && hasNl ? "$" : "") + (hasNl ? "\n" : ""));
+      });
+      return res.join("");
+    };
     for (const t of targets) {
       if (t === "-") {
-        out += bytesToText(ctx.stdin);
+        out += render(bytesToText(ctx.stdin));
         continue;
       }
       const abs = resolve(ctx.cwd, t);
@@ -661,15 +704,96 @@ export function catCommand(w: World): Command {
         code = 1;
         continue;
       }
-      out += (await w.read(abs)) ?? "";
+      out += render((await w.read(abs)) ?? "");
     }
-    if (p.flags.has("n")) {
-      const lines = out.split("\n");
-      const tail = out.endsWith("\n") ? lines.pop() : undefined;
-      out = lines.map((l, i) => `${String(i + 1).padStart(6)}\t${l}`).join("\n") + (tail !== undefined ? "\n" : "");
-    }
-    if (p.flags.has("A") || p.flags.has("E")) out = out.replace(/\n/g, "$\n");
     return { stdout: out, stderr: err, exitCode: code };
   });
 }
 
+
+// ---------- head ----------
+
+/** Число с суффиксом как у coreutils: 10, 1k, 2K, 3M, 1b (=512), 1kB (=1000). */
+function parseCount(v: string): number | null {
+  const m = /^(\d+)(b|kB|KB|k|K|MB|M|GB|G)?$/.exec(v);
+  if (!m) return null;
+  const mult: Record<string, number> = { b: 512, kB: 1000, KB: 1000, k: 1024, K: 1024, MB: 1e6, M: 1024 ** 2, GB: 1e9, G: 1024 ** 3 };
+  return Number(m[1]) * (m[2] ? mult[m[2]] : 1);
+}
+
+/** Свой head: умеет -n -N / -c -N (всё, кроме последних N), -q, -v, несколько файлов. */
+export function headCommand(w: World): Command {
+  return defineCommand("head", async (args, ctx) => {
+    // -5 — сокращение для -n 5
+    const norm = args.map((a, i) => (/^-\d+$/.test(a) && !["-n", "-c", "--lines", "--bytes"].includes(args[i - 1] ?? "") ? `-n${a.slice(1)}` : a));
+    const p = parseArgs(norm, { short: "qvz", withValue: ["n", "c"], long: { lines: "n", bytes: "c", quiet: "q", silent: "q", verbose: "v", "zero-terminated": "z" } });
+    if (p.bad) return fail(invalidOpt("head", p.bad));
+    let mode: "n" | "c" = "n";
+    let raw = "10";
+    for (const a of norm) {
+      if (a === "--") break;
+      const m = /^-[a-zA-Z]*([nc])(.*)$/.exec(a) ?? /^--(lines|bytes)=(.*)$/.exec(a);
+      if (m) {
+        mode = m[1][0] as "n" | "c";
+        raw = m[2] || p.values.get(mode) || raw;
+      }
+    }
+    if (p.values.has("n") && mode === "n") raw = p.values.get("n")!;
+    if (p.values.has("c") && mode === "c") raw = p.values.get("c")!;
+    const neg = raw.startsWith("-");
+    const count = parseCount(neg ? raw.slice(1) : raw.replace(/^\+/, ""));
+    if (count === null) return fail(`head: invalid number of ${mode === "n" ? "lines" : "bytes"}: '${raw}'`);
+    const files = p.rest.length ? p.rest : ["-"];
+    const header = files.length > 1 ? !p.flags.has("q") : p.flags.has("v");
+    const sep = p.flags.has("z") ? "\0" : "\n";
+    let out = "";
+    let err = "";
+    let code = 0;
+    const take = (text: string): string => {
+      if (mode === "c") {
+        const bytes = new TextEncoder().encode(text);
+        const n = neg ? Math.max(0, bytes.length - count) : Math.min(count, bytes.length);
+        return new TextDecoder().decode(bytes.slice(0, n));
+      }
+      const lines = text.split(sep);
+      const trailing = text.endsWith(sep);
+      if (trailing) lines.pop();
+      const n = neg ? Math.max(0, lines.length - count) : Math.min(count, lines.length);
+      const kept = lines.slice(0, n);
+      const full = n < lines.length || trailing;
+      return kept.join(sep) + (kept.length && full ? sep : "");
+    };
+    let first = true;
+    for (const t of files) {
+      let text: string;
+      let shown = t;
+      if (t === "-") {
+        text = bytesToText(ctx.stdin);
+        shown = "standard input";
+      } else {
+        const abs = resolve(ctx.cwd, t);
+        const inf = await w.info(abs, true);
+        if (!inf) {
+          err += `head: cannot open '${t}' for reading: No such file or directory\n`;
+          code = 1;
+          continue;
+        }
+        if (!(await w.canTraverse(abs)) || (!inf.isDir && !w.permOn(inf, "r"))) {
+          err += `head: cannot open '${t}' for reading: Permission denied\n`;
+          code = 1;
+          continue;
+        }
+        if (inf.isDir) {
+          err += `head: error reading '${t}': Is a directory\n`;
+          code = 1;
+          continue;
+        }
+        text = (await w.read(abs)) ?? "";
+      }
+      if (header) out += `${first ? "" : "\n"}==> ${shown} <==\n`;
+      first = false;
+      out += take(text);
+    }
+    return { stdout: out, stderr: err, exitCode: code };
+  });
+}

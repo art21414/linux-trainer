@@ -632,7 +632,14 @@ export class Storage {
     const res = new Map<number, { bytes: number; inodes: number }>();
     for (const m of this.mounts) res.set(m.id, { bytes: 0, inodes: 0 });
     for (const p of this.w.base.getAllPaths()) {
-      const m = this.mountFor(p);
+      let m = this.mountFor(p);
+      if (p.startsWith("/proc/.held/")) {
+        // удалённый, но открытый файл: место и inode записаны за ФС, где он лежал (du его не видит, df — видит)
+        const h = this.w.files.heldByPath(p);
+        const owner = h ? this.mounts.find((x) => x.id === h.mountId) : undefined;
+        if (!owner) continue;
+        m = owner;
+      }
       if (!m.acct) continue;
       let st;
       try {
@@ -941,7 +948,7 @@ export class Storage {
       const hidden = await this.snapshot(target);
       const m: Mount = {
         id: this.nextMountId++, source: spec, target, fstype: "tmpfs", vfs: o.vfs, fsopts: o.fsopts, acct: true, parentId: parent.id,
-        tmp: { size: (o.tmpSizeKib ?? 0) * KiB, baseUsed: 0, inodes: o.tmpInodes ?? 1022946, baseInodes: 1 },
+        tmp: { size: (o.tmpSizeKib ?? 0) * KiB, baseUsed: 0, inodes: o.tmpInodes ?? 1022946, baseInodes: 0 }, // корень ФС считается как файл точки монтирования
         hidden: hidden.length ? hidden : undefined,
       };
       this.mounts.push(m);
