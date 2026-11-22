@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createServer, Shell } from "../src/engine/shell";
 import { applyMode } from "../src/engine/commands/perms";
 
@@ -166,12 +166,20 @@ describe("времена файлов: atime, ctime, mtime", () => {
     const t = new Date(Date.now() - 3600_000);
     await w.setTimes("/tmp/t/a", { atime: t, mtime: new Date(t.getTime() - 7200_000) });
     // ctime сейчас (setTimes), atime час назад — старше ctime, поэтому первое чтение обновляет...
-    await run(s, "cat a");
-    const first = (await w.info("/tmp/t/a"))!.atime.getTime();
-    expect(first).toBeGreaterThan(t.getTime());
-    // ...а второе уже нет: atime новее и mtime, и ctime, суток не прошло
-    await new Promise((r) => setTimeout(r, 15));
-    await run(s, "cat a");
+    // время подставляем явно: без реальных задержек и совпадений в одну миллисекунду
+    const base = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"], now: base + 1000 });
+    let first: number;
+    try {
+      await run(s, "cat a");
+      first = (await w.info("/tmp/t/a"))!.atime.getTime();
+      expect(first).toBe(base + 1000);
+      // ...а второе уже нет: atime новее и mtime, и ctime, суток не прошло
+      vi.setSystemTime(base + 61_000);
+      await run(s, "cat a");
+    } finally {
+      vi.useRealTimers();
+    }
     expect((await w.info("/tmp/t/a"))!.atime.getTime()).toBe(first);
   });
 

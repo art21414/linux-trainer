@@ -15,6 +15,9 @@ async function fresh(t: TerminalEx) {
   return { w, shell };
 }
 
+// до переписывания по шаблону
+const LEGACY_THEORY: string[] = [];
+
 describe("content: структура", () => {
   it("id разделов, тем и наборов уникальны", () => {
     const topics = ALL_TOPICS.map((t) => t.id);
@@ -37,9 +40,13 @@ describe("content: структура", () => {
       const parsed = parseTheory(topic.theory);
       const anchors = parsed.sections.map((s) => s.anchor);
 
-      it("якоря theory.md уникальны, подтем 3–8 (временная тема-пример: ≥ 1)", () => {
+      it("якоря theory.md уникальны, подтем 3–6, теория ≤ 18000 байт", () => {
         expect(new Set(anchors).size).toBe(anchors.length);
-        expect(anchors.length).toBeGreaterThan(0);
+        if (LEGACY_THEORY.includes(topic.id)) return;
+        const bytes = Buffer.byteLength(topic.theory, "utf8");
+        expect(bytes, `тема ${topic.id}: теория ${bytes} байт > 18000, сократи по docs/style-reference.md`).toBeLessThanOrEqual(18000);
+        expect(anchors.length, `тема ${topic.id}: подтем ${anchors.length}, нужно 3–6 (включая «Шпаргалку»)`).toBeGreaterThanOrEqual(3);
+        expect(anchors.length, `тема ${topic.id}: подтем ${anchors.length}, нужно 3–6 (включая «Шпаргалку»)`).toBeLessThanOrEqual(6);
       });
 
       it("каждый якорь из заданий существует", () => {
