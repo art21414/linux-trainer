@@ -20,7 +20,7 @@ import { procCommands } from "./commands/procs";
 import { syncProc } from "./procfs";
 import { registerBaseServices } from "./commands/services";
 import { fixGlobs } from "./globs";
-import { aliasBuiltin, fixAliases, fixCdP, fixTilde } from "./expand";
+import { aliasBuiltin, fixAliases, fixArgv0, fixCdP, fixTilde } from "./expand";
 
 export type RunKind = "ok" | "error" | "notfound" | "unsupported" | "danger" | "sudo" | "clear" | "empty" | "su" | "exit";
 
@@ -136,6 +136,7 @@ export async function createServer(): Promise<World> {
 }
 
 interface Frame {
+  argv0: string;
   user: string;
   env: Record<string, string>;
   login: boolean;
@@ -150,6 +151,8 @@ export class Shell {
   private noclobber = false;
   /** alias name='...' (переживают строки терминала, как в интерактивном bash). */
   private aliases = new Map<string, string>();
+  /** $0 сессии: «-bash» у login shell, «bash» после su без дефиса. */
+  private argv0 = "-bash";
   private names: string[];
 
   constructor(
@@ -244,6 +247,7 @@ export class Shell {
       if (!frame) return { out: "тренажёр: это основная сессия, выходить некуда 🙂\n", code: 1, kind: "error", cmd };
       this.world.current = frame.user;
       this.env = frame.env;
+      this.argv0 = frame.argv0;
       return { out: frame.login ? "logout\n" : "", code: 0, kind: "exit", cmd };
     }
     if (/:\(\)\s*\{/.test(trimmed)) {
@@ -271,7 +275,7 @@ export class Shell {
       const prefix = this.noclobber ? "set -C\n" : "";
       await syncProc(w);
       w.activatePaths();
-      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, fixCdP(fixTilde(w, fixAliases(this.aliases, trimmed)), this.cwd), this.env)), { cwd: this.cwd, env: this.env });
+      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, fixCdP(fixTilde(w, fixAliases(this.aliases, fixArgv0(trimmed, this.argv0))), this.cwd), this.env)), { cwd: this.cwd, env: this.env });
       if (clobberOn.length) this.noclobber = clobberOn[clobberOn.length - 1];
       stdout = r.stdout;
       stderr = r.stderr;
@@ -289,10 +293,22 @@ export class Shell {
     const pending = w.pendingSu as PendingSu | null;
     if (pending) {
       const target = w.user(pending.user)!;
-      this.stack.push({ user: w.current, env: this.env, login: pending.login });
+      this.stack.push({ user: w.current, env: this.env, login: pending.login, argv0: this.argv0 });
       w.current = target.name;
-      this.env = this.loginEnv(target, pending.login ? target.home : this.cwd);
+      const prevEnv = this.env;
+      this.env = pending.login
+        ? this.loginEnv(target, target.home)
+        : { ...prevEnv, HOME: target.home, USER: target.name, LOGNAME: target.name, SHELL: target.shell };
+      this.argv0 = pending.login ? "-bash" : "bash";
       w.pendingSu = null;
+      // как настоящий bash: login — /etc/profile и ~/.bash_profile (он зовёт ~/.bashrc), без login — только ~/.bashrc
+      const init = pending.login ? "[ -f /etc/profile ] && . /etc/profile; [ -f ~/.bash_profile ] && . ~/.bash_profile" : "[ -f ~/.bashrc ] && . ~/.bashrc";
+      try {
+        const ir = await this.bash.exec(init, { cwd: this.env.PWD || target.home, env: this.env });
+        this.env = { ...ir.env, PWD: this.env.PWD };
+      } catch {
+        /* битый rc-файл не должен ломать su */
+      }
       kind = "su";
     }
     stderr = fixParamErrors(trimmed, normalizeErrors(stderr));

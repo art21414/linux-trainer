@@ -179,7 +179,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     setTimeout(() => sheetBtn.focus({ preventScroll: true }), 50);
   };
 
-  const explainHtml = (ex: Exercise) => (ex.explain ? `<span class="explain">${esc(ex.explain)}</span>` : "");
+  const explainHtml = (ex: Exercise) => (ex.explain ? `<span class="explain">${mdInline(ex.explain)}</span>` : "");
 
   /** Верный ответ: в повторении с первой попытки снимаем ошибку. */
   const onSolved = (item: ReviewItem, idx: number) => {
@@ -307,7 +307,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
       hintLevel++;
       hintBox.style.display = "";
       if (hintLevel === 1) {
-        hintBox.innerHTML = esc(ex.hint);
+        hintBox.innerHTML = mdInline(ex.hint);
         hintBtn.replaceChildren(icon("known", { size: 18 }), " Показать решение");
         mascot.react("hint");
       } else {

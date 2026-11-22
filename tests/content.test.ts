@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALL_TOPICS, allExercises, allSets, SECTIONS } from "../src/content/topics";
-import { parseTheory, renderMarkdown } from "../src/content/theory";
+import { parseTheory, renderMarkdown, splitRow } from "../src/content/theory";
 import { createServer, Shell } from "../src/engine/shell";
 import type { TerminalEx } from "../src/content/types";
 
@@ -113,4 +113,11 @@ describe("theory: парсер", () => {
 // Рендер в DOM проверяется в браузере (vitest идёт в node); здесь — только что функция экспортируется.
 describe("theory: рендер", () => {
   it("renderMarkdown экспортируется", () => expect(typeof renderMarkdown).toBe("function"));
+});
+
+describe("theory: таблицы", () => {
+  it("экранированный \\| — литерал, не разделитель", () => {
+    expect(splitRow("| `ls -t \\| head -1` | последний файл |")).toEqual(["`ls -t | head -1`", "последний файл"]);
+    expect(splitRow("| a | b |")).toEqual(["a", "b"]);
+  });
 });

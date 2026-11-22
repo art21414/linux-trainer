@@ -133,3 +133,25 @@ export function aliasBuiltin(aliases: Map<string, string>, line: string): { out:
   }
   return null;
 }
+
+/** `$0` / `${0}` вне одинарных кавычек → имя оболочки сессии (`-bash` у login shell, `bash` у остальных). */
+export function fixArgv0(line: string, argv0: string): string {
+  let out = "";
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "'") q = !q;
+    if (!q && c === "\\") {
+      out += c + (line[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (!q && c === "$" && (line[i + 1] === "0" || line.startsWith("{0}", i + 1))) {
+      out += argv0;
+      i += line[i + 1] === "0" ? 1 : 3;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}

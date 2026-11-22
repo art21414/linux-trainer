@@ -74,7 +74,25 @@ function calloutClass(text: string): string {
   return CALLOUTS[key] ?? "note";
 }
 
-const splitRow = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+/** Делит строку таблицы по `|`; `\|` остаётся литералом `|` (в т.ч. внутри `кода`). */
+export const splitRow = (l: string) => {
+  const cells: string[] = [];
+  let cur = "";
+  const t = l.trim();
+  for (let k = 0; k < t.length; k++) {
+    if (t[k] === "\\" && t[k + 1] === "|") {
+      cur += "|";
+      k++;
+    } else if (t[k] === "|") {
+      cells.push(cur);
+      cur = "";
+    } else cur += t[k];
+  }
+  cells.push(cur);
+  if (t.startsWith("|")) cells.shift();
+  if (t.endsWith("|") && !t.endsWith("\\|")) cells.pop();
+  return cells.map((c) => c.trim());
+};
 const isSep = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
 
 /** Рендер markdown-подмножества: абзацы, списки, таблицы, цитаты-выноски, блоки кода. */
