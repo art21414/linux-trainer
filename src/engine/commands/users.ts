@@ -3,7 +3,7 @@ import { defineCommand } from "just-bash";
 import type { Command } from "just-bash";
 import type { User, World } from "../world";
 import { bytesToText, fail, ok, parseArgs, shq } from "../util";
-import { accountCommands, matchRules, readSudoers, sudoCmdPath } from "./accounts";
+import { accountCommands, matchRules, readSudoers, rulesFor, sudoCmdPath } from "./accounts";
 import { todayDays } from "../world";
 
 const SHELLS = ["/bin/sh", "/bin/bash", "/sbin/nologin", "/usr/bin/sh", "/usr/bin/bash", "/usr/sbin/nologin", "/bin/false", "/usr/bin/false", "/bin/tcsh", "/bin/csh"];
@@ -204,6 +204,7 @@ export function userCommands(w: World): Command[] {
       w.users.delete(name);
       u.name = nn;
       w.users.set(nn, u);
+      if (await w.exists(`/var/spool/mail/${name}`)) await w.base.mv(`/var/spool/mail/${name}`, `/var/spool/mail/${nn}`);
     }
     await w.syncEtc();
     return { stdout: "", stderr: err, exitCode: 0 };
@@ -399,7 +400,7 @@ export function userCommands(w: World): Command[] {
       const who = listUser ? w.user(listUser) : me;
       if (listUser && me.uid !== 0) return fail(`Sorry, user ${me.name} is not allowed to execute 'list' as ${listUser} on ${host}.`, 1);
       if (!who) return fail(`sudo: unknown user ${listUser}`, 1);
-      const rules = matchRules(w, info, who, "ALL").length ? info.rules.filter((r) => matchRules(w, info, who, "ALL").includes(r)) : [];
+      const rules = rulesFor(w, info, who);
       const own = listUser ? `User ${who.name} is not allowed to run sudo on ${host}.\n` : `Sorry, user ${who.name} may not run sudo on ${host}.\n`;
       if (!rules.length) return { stdout: listUser ? own : "", stderr: listUser ? "" : own, exitCode: listUser ? 0 : 1 };
       const defaults = `Matching Defaults entries for ${who.name} on ${host}:\n    !visiblepw, always_set_home, match_group_by_gid, always_query_group_plugin, env_reset, env_keep="COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS", env_keep+="MAIL PS1 PS2 QTDIR USERNAME LANG LC_ADDRESS LC_CTYPE", env_keep+="LC_COLLATE LC_IDENTIFICATION LC_MEASUREMENT LC_MESSAGES", env_keep+="LC_MONETARY LC_NAME LC_NUMERIC LC_PAPER LC_TELEPHONE", env_keep+="LC_TIME LC_ALL LANGUAGE LINGUAS _XKB_CHARSET XAUTHORITY", secure_path=/sbin\\:/bin\\:/usr/sbin\\:/usr/bin\n\n`;
@@ -409,7 +410,7 @@ export function userCommands(w: World): Command[] {
     if (mode === "cmd" && !cmd.length) return fail("usage: sudo -h | -K | -k | -V\nusage: sudo -v [-ABkNnS] [-g group] [-h host] [-p prompt] [-u user]", 1);
     if (!w.user(target)) return fail(`sudo: unknown user ${target}`, 1);
     const cmdPath = mode === "cmd" ? await sudoCmdPath(w, cmd[0]) : "/bin/bash";
-    const anyRule = matchRules(w, info, me, "ALL");
+    const anyRule = rulesFor(w, info, me);
     let rules = me.uid === 0 ? [{ who: "root", runas: ["ALL"], nopasswd: true, cmds: ["ALL"] }] : matchRules(w, info, me, target, mode === "cmd" ? cmdPath : undefined);
     if (me.uid !== 0 && mode !== "cmd") rules = rules.filter((r) => r.cmds.includes("ALL") || r.cmds.some((c) => /\/(ba)?sh$/.test(c)));
     if (!rules.length) {

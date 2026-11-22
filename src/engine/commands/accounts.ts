@@ -89,6 +89,11 @@ function ruleApplies(w: World, u: User, r: SudoRule): boolean {
   return false;
 }
 
+/** Все правила, которые относятся к пользователю (любой runas и команда). */
+export function rulesFor(w: World, info: SudoersInfo, u: User): SudoRule[] {
+  return info.rules.filter((r) => ruleApplies(w, u, r));
+}
+
 /** Подходящие правила для user → target; cmdPath — проверяемая команда (undefined — любые). */
 export function matchRules(w: World, info: SudoersInfo, u: User, target: string, cmdPath?: string): SudoRule[] {
   return info.rules.filter((r) => {
