@@ -139,7 +139,7 @@ export function formatAcl(
     for (const [id, p] of [...d.users].sort((x, y) => x[0] - y[0])) out += `default:user:${names.user(id)}:${permStr(p)}${eff(p, d.mask)}\n`;
     out += `default:group::${permStr(d.group)}${d.users.size || d.groups.size ? eff(d.group, d.mask) : ""}\n`;
     for (const [id, p] of [...d.groups].sort((x, y) => x[0] - y[0])) out += `default:group:${names.group(id)}:${permStr(p)}${eff(p, d.mask)}\n`;
-    out += `default:mask::${permStr(d.mask)}\n`;
+    if (d.users.size || d.groups.size) out += `default:mask::${permStr(d.mask)}\n`;
     out += `default:other::${permStr(d.other)}\n`;
   }
   void ownerName;

@@ -8,7 +8,7 @@ import { InodeTable } from "./inodes";
 import { ProcTable } from "./procs";
 import { Storage } from "./storage";
 import { OpenFiles } from "./openfiles";
-import { aclPerms, cloneAcl, extended } from "./acl";
+import { aclPerms, extended } from "./acl";
 import type { Acl } from "./acl";
 import type { HoldOpts, HoldWho } from "./openfiles";
 
@@ -549,6 +549,15 @@ export class World {
   hasAcl(path: string): boolean {
     const a = this.aclOf(path);
     return !!a && (extended(a) || !!a.def);
+  }
+
+  /** Как setMode, но без пересчёта маски ACL (его делает setfacl сам). */
+  async setModeRaw(path: string, mode: number): Promise<void> {
+    path = await this.resolveFinal(path);
+    await this.ensureTimes(path);
+    await this.base.chmod(normalize(path), mode);
+    for (const n of this.inodes.names(path)) if (n !== normalize(path)) await this.base.chmod(n, mode);
+    await this.stampChange(path);
   }
 
   async setMode(path: string, mode: number): Promise<void> {

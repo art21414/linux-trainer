@@ -9,7 +9,7 @@ export const UNSUPPORTED = [
   "journalctl", "dnf", "yum", "rpm", "ip", "ss", "nmcli", "nmtui", "firewall-cmd", "ping", "curl", "wget",
   "top", "htop", "nice", "renice", "uptime",
   "fdisk", "parted", "pvcreate", "vgcreate", "lvcreate", "lvextend",
-  "getfacl", "setfacl", "getenforce", "setenforce", "semanage", "restorecon", "chcon", "sestatus", "crontab",
+  "getenforce", "setenforce", "semanage", "restorecon", "chcon", "sestatus", "crontab",
   "at", "tuned-adm", "podman", "ssh", "scp", "rsync", "vi", "vim", "nano", "less", "more", "dmesg",
   "last", "w", "who", "lscpu", "timedatectl", "chronyc", "localectl", "sudoedit", "newgrp", "gpasswd",
 ];

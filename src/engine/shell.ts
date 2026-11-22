@@ -13,6 +13,7 @@ import { touchCommand } from "./commands/touch";
 import { cpCommand, mkdirCommand, mvCommand, rmCommand } from "./commands/fileops";
 import { linkCommands } from "./commands/links";
 import { findCommand } from "./commands/find";
+import { aclCommands } from "./commands/acl";
 import { fileCommand } from "./commands/file";
 import { tailCommand, wcCommand } from "./commands/text";
 import { lsofCommand } from "./commands/lsof";
@@ -195,6 +196,7 @@ export class Shell {
       ...miscCommands(world, opts.onUnsupported ?? (() => {})),
       lsofCommand(world),
       fileCommand(world),
+      ...aclCommands(world),
       tailCommand(world),
       wcCommand(world),
       // ps/pgrep/pkill/pidof/kill/killall — на модели процессов (procs.ts); jobs/nice/top требуют отдельной интеграции с оболочкой

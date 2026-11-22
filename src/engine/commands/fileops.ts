@@ -1,6 +1,7 @@
 // rm, cp, mv — свои реализации по образцу GNU coreutils 8.32 (RHEL 9): интерактивные вопросы (-i, -I),
 // сохранение атрибутов (-p, -a), -T/-t, резервные копии, подробный вывод (-v), «сухие» ошибки как у настоящих.
 // Времена (atime/ctime/mtime) и владельцев ведёт мир: здесь только вызываем охраняемую ФС и World.setTimes/setOwner.
+import { cloneAcl } from "../acl";
 import { defineCommand } from "just-bash";
 import type { Command } from "just-bash";
 import type { NodeInfo, World } from "../world";
@@ -408,7 +409,13 @@ export function cpCommand(w: World): Command {
         if (me.uid === 0) w.setOwner(destAbs, srcInf.uid, srcInf.gid);
         else if (gids.has(srcInf.gid)) w.setOwner(destAbs, (await w.info(destAbs))!.uid, srcInf.gid);
       }
-      if (preserve.has("mode")) await w.setMode(destAbs, srcInf.mode);
+      if (preserve.has("mode")) {
+        await w.setMode(destAbs, srcInf.mode);
+        // cp -p / -a переносит и ACL (маска уже в битах группы)
+        const sa = w.aclOf(srcInf.path);
+        if (sa && !srcInf.isLink) w.acls.set(w.inodes.ino(destAbs), cloneAcl(sa));
+        else w.acls.delete(w.inodes.ino(destAbs));
+      }
       else if (created) await w.setMode(destAbs, srcInf.mode & ~w.umask & 0o777);
       if (preserve.has("timestamps")) await w.setTimes(destAbs, { atime: srcInf.atime, mtime: srcInf.mtime });
       void destShown;

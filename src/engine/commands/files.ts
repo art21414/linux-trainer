@@ -364,7 +364,7 @@ export function lsCommand(w: World): Command {
           const group = f.has("n") ? String(inf.gid) : (w.groupByGid(inf.gid)?.name ?? String(inf.gid));
           const when = timeStyle ? formatLsTime(timeOf(inf), timeStyle, now) : lsDate(timeOf(inf), now);
           rows.push([
-            frills(inf) + (CHARDEVS[inf.path] && !inf.isLink ? "c" + CHARDEVS[inf.path][2] : modeString(inf)) + ".",
+            frills(inf) + (CHARDEVS[inf.path] && !inf.isLink ? "c" + CHARDEVS[inf.path][2] : modeString(inf)) + (w.hasAcl(inf.path) ? "+" : "."),
             String(await linkCount(w, inf)),
             f.has("g") ? "" : user,
             f.has("o") || f.has("G") ? "" : group,
