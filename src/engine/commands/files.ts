@@ -16,6 +16,12 @@ const C = {
 };
 
 /** -rwxr-xr-x с учётом suid/sgid/sticky. */
+/** Символьные устройства, которые мир показывает в ls -l как в Rocky (major, minor, права). */
+const CHARDEVS: Record<string, [number, number, string]> = {
+  "/dev/null": [1, 3, "rw-rw-rw-"], "/dev/zero": [1, 5, "rw-rw-rw-"], "/dev/full": [1, 7, "rw-rw-rw-"], "/dev/random": [1, 8, "rw-rw-rw-"],
+  "/dev/urandom": [1, 9, "rw-rw-rw-"], "/dev/tty": [5, 0, "rw-rw-rw-"], "/dev/console": [5, 1, "rw--w----"],
+};
+
 export function modeString(inf: Pick<NodeInfo, "mode" | "isDir" | "isLink">): string {
   const m = inf.mode;
   const t = inf.isLink ? "l" : inf.isDir ? "d" : "-";
@@ -358,11 +364,11 @@ export function lsCommand(w: World): Command {
           const group = f.has("n") ? String(inf.gid) : (w.groupByGid(inf.gid)?.name ?? String(inf.gid));
           const when = timeStyle ? formatLsTime(timeOf(inf), timeStyle, now) : lsDate(timeOf(inf), now);
           rows.push([
-            frills(inf) + modeString(inf) + ".",
+            frills(inf) + (CHARDEVS[inf.path] && !inf.isLink ? "c" + CHARDEVS[inf.path][2] : modeString(inf)) + ".",
             String(await linkCount(w, inf)),
             f.has("g") ? "" : user,
             f.has("o") || f.has("G") ? "" : group,
-            f.has("h") ? humanSize(size, baseNum) : String(size),
+            CHARDEVS[inf.path] && !inf.isLink ? `${CHARDEVS[inf.path][0]}, ${CHARDEVS[inf.path][1]}` : f.has("h") ? humanSize(size, baseNum) : String(size),
             when,
             await nameCell({ name, inf }, align, true),
           ]);
@@ -708,7 +714,7 @@ export function catCommand(w: World): Command {
 // ---------- head ----------
 
 /** Число с суффиксом как у coreutils: 10, 1k, 2K, 3M, 1b (=512), 1kB (=1000). */
-function parseCount(v: string): number | null {
+export function parseCount(v: string): number | null {
   const m = /^(\d+)(b|kB|KB|k|K|MB|M|GB|G)?$/.exec(v);
   if (!m) return null;
   const mult: Record<string, number> = { b: 512, kB: 1000, KB: 1000, k: 1024, K: 1024, MB: 1e6, M: 1024 ** 2, GB: 1e9, G: 1024 ** 3 };

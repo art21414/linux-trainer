@@ -14,6 +14,7 @@ import { cpCommand, mkdirCommand, mvCommand, rmCommand } from "./commands/fileop
 import { linkCommands } from "./commands/links";
 import { findCommand } from "./commands/find";
 import { fileCommand } from "./commands/file";
+import { tailCommand, wcCommand } from "./commands/text";
 import { lsofCommand } from "./commands/lsof";
 import { procCommands } from "./commands/procs";
 import { syncProc } from "./procfs";
@@ -159,6 +160,8 @@ export class Shell {
       ...miscCommands(world, opts.onUnsupported ?? (() => {})),
       lsofCommand(world),
       fileCommand(world),
+      tailCommand(world),
+      wcCommand(world),
       // ps/pgrep/pkill/pidof/kill/killall — на модели процессов (procs.ts); jobs/nice/top требуют отдельной интеграции с оболочкой
       ...procCommands(world, opts.onUnsupported ?? (() => {})).filter((c) => ["ps", "pgrep", "pkill", "pidof", "kill", "killall"].includes(c.name)),
       ...storageCommands(world, opts.onUnsupported ?? (() => {})),

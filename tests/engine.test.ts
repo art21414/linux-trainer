@@ -888,3 +888,34 @@ describe("главы 04–06: inode, file, времена, alias", () => {
     expect((await s.run("t zz")).out).toBe("bash: t: command not found\n");
   });
 });
+
+describe("wc, tail, ls -l для устройств", () => {
+  it("wc: ширина как у coreutils, каталог, -L", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && printf 'PORT=8080 \\nHOST=0.0.0.0\\nDEBUG=false' > env && printf 'a\\n\\tbb\\n' > t");
+    expect((await s.run("wc env")).out).toBe(" 2  3 35 env\n");
+    expect((await s.run("wc -l env")).out).toBe("2 env\n");
+    expect((await s.run("echo abc | wc")).out).toBe("      1       1       4\n");
+    expect((await s.run("echo abc | wc -l")).out).toBe("1\n");
+    expect((await s.run("wc -L t")).out).toBe("10 t\n");
+    expect((await s.run("wc /etc")).out).toBe("      0       0       0 /etc\nwc: /etc: Is a directory\n"); // stderr после stdout — порядок потоков в Shell
+    expect((await s.run("wc -l env t")).out).toBe(" 2 env\n 2 t\n 4 total\n");
+  });
+
+  it("tail на каталоге и нормальная работа", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && seq 1 10 > n");
+    expect((await s.run("tail /etc")).out).toBe("tail: error reading '/etc': Is a directory\n");
+    expect((await s.run("tail -n 2 n")).out).toBe("9\n10\n");
+    expect((await s.run("tail -n +9 n")).out).toBe("9\n10\n");
+    expect((await s.run("tail -3 n | head -1")).out).toBe("8\n");
+    expect((await s.run("tail nonexist")).out).toBe("tail: cannot open 'nonexist' for reading: No such file or directory\n");
+  });
+
+  it("ls -l показывает /dev/null как символьное устройство", async () => {
+    const s = await sh();
+    expect((await s.run("ls -l /dev/null /dev/zero | cat")).out.replace(/ \w{3} [ \d]\d \d\d:\d\d/g, "")).toBe(
+      "crw-rw-rw-. 1 root root 1, 3 /dev/null\ncrw-rw-rw-. 1 root root 1, 5 /dev/zero\n",
+    );
+  });
+});
