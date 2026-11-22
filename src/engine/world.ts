@@ -18,7 +18,16 @@ export interface User {
   home: string;
   shell: string;
   comment: string;
+  /** Пароль открытым текстом (в /etc/shadow пишется фиктивный хеш). undefined — пароля нет (`!!`), "" — пустой. */
+  password?: string;
+  /** Учётная запись заблокирована (`usermod -L`, `passwd -l`): в shadow перед хешем «!». */
+  locked?: boolean;
+  /** Старение пароля (chage). lastChange — дни с 1970 (0 — «password must be changed»); -1 — не задано. */
+  aging?: { lastChange: number; min: number; max: number; warn: number; inactive: number; expire: number };
 }
+
+export const DAY_MS = 86400000;
+export const todayDays = () => Math.floor(Date.now() / DAY_MS);
 
 export interface Group {
   name: string;
@@ -202,12 +211,12 @@ export class World {
 
   async addUser(
     name: string,
-    opts: { uid?: number; gid?: number; groups?: string[]; home?: string; shell?: string; comment?: string; createHome?: boolean } = {},
+    opts: { uid?: number; gid?: number; groups?: string[]; home?: string; shell?: string; comment?: string; createHome?: boolean; system?: boolean } = {},
   ): Promise<User> {
-    const uid = opts.uid ?? this.nextId([...this.users.values()].map((u) => u.uid));
+    const uid = opts.uid ?? (opts.system ? this.sysId([...this.users.values()].map((u) => u.uid)) : this.nextId([...this.users.values()].map((u) => u.uid)));
     let gid = opts.gid;
     if (gid === undefined) {
-      const g = this.groups.get(name) ?? this.addGroup(name, this.groupByGid(uid) ? undefined : uid);
+      const g = this.groups.get(name) ?? this.addGroup(name, this.groupByGid(uid) ? (opts.system ? this.sysId([...this.groups.values()].map((x) => x.gid)) : undefined) : uid);
       gid = g.gid;
     }
     const u: User = {
@@ -221,19 +230,77 @@ export class World {
     };
     this.users.set(name, u);
     if (opts.createHome !== false) {
-      await this.mkdir(u.home, 0o700, uid, gid);
-      for (const f of [".bash_logout", ".bash_profile", ".bashrc"]) {
-        await this.write(`${u.home}/${f}`, `# ${f}\n`, 0o644, uid, gid);
-      }
+      await this.mkdir(u.home, parseInt(await this.loginDef("HOME_MODE", "0700"), 8), uid, gid);
+      await this.copySkel(u.home, uid, gid);
     }
     await this.syncEtc();
     return u;
   }
 
-  private nextId(used: number[]): number {
-    let id = 1000;
+  private nextId(used: number[], min = 1000): number {
+    let id = min;
     while (used.includes(id)) id++;
     return id;
+  }
+
+  private sysId(used: number[]): number {
+    let id = 999;
+    while (used.includes(id) && id > 200) id--;
+    return id;
+  }
+
+  /** Содержимое /etc/skel → домашний каталог (как useradd -m). */
+  async copySkel(home: string, uid: number, gid: number, skel = "/etc/skel"): Promise<void> {
+    const walk = async (from: string, to: string) => {
+      let names: string[] = [];
+      try {
+        names = await this.base.readdir(from);
+      } catch {
+        return;
+      }
+      for (const n of names) {
+        const src = `${from}/${n}`;
+        const dst = `${to}/${n}`;
+        const st = await this.base.lstat(src);
+        if (st.isDirectory) {
+          await this.mkdir(dst, st.mode & 0o7777, uid, gid);
+          await walk(src, dst);
+        } else if (st.isFile) await this.write(dst, await this.base.readFile(src), st.mode & 0o7777, uid, gid);
+      }
+    };
+    await walk(skel, home);
+  }
+
+  /** Значение из /etc/login.defs (или запасное). */
+  async loginDef(key: string, fallback: string): Promise<string> {
+    const text = (await this.read("/etc/login.defs")) ?? "";
+    const m = new RegExp(`^${key}\\s+(\\S+)`, "m").exec(text);
+    return m ? m[1] : fallback;
+  }
+
+  /** Задать пароль (для заданий: `await world.setPassword("bob", "secret")`). */
+  async setPassword(name: string, password: string): Promise<void> {
+    const u = this.users.get(name);
+    if (!u) return;
+    u.password = password;
+    this.agingOf(u).lastChange = todayDays();
+    await this.syncEtc();
+  }
+
+  agingOf(u: User): NonNullable<User["aging"]> {
+    return (u.aging ??= { lastChange: todayDays(), min: 0, max: 99999, warn: 7, inactive: -1, expire: -1 });
+  }
+
+  /** Фиктивный SHA-512-хеш: стабилен для одного пароля. */
+  hashOf(pw: string): string {
+    let h = 2166136261;
+    const out: string[] = [];
+    const alpha = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    for (let i = 0; i < 102; i++) {
+      h = Math.imul(h ^ (pw.charCodeAt(i % Math.max(1, pw.length)) || 0) ^ i, 16777619) >>> 0;
+      out.push(alpha[h % 64]);
+    }
+    return `$6$${out.slice(0, 16).join("")}$${out.slice(16).join("").slice(0, 86)}`;
   }
 
   /** Перегенерировать /etc/passwd и /etc/group из модели. */
@@ -249,7 +316,17 @@ export class World {
         return `${g.name}:x:${g.gid}:${members.join(",")}`;
       })
       .join("\n");
+    const shadow = [...this.users.values()]
+      .sort((a, b) => a.uid - b.uid)
+      .map((u) => {
+        const a = this.agingOf(u);
+        const field = u.password === undefined ? (u.uid < 1000 && u.uid !== 0 ? "*" : "!!") : u.password === "" ? "" : this.hashOf(u.password);
+        const f = u.locked && !field.startsWith("!") && field !== "*" ? "!" + field : field;
+        return `${u.name}:${f}:${a.lastChange}:${a.min}:${a.max}:${a.warn}:${a.inactive < 0 ? "" : a.inactive}:${a.expire < 0 ? "" : a.expire}:`;
+      })
+      .join("\n");
     await this.write("/etc/passwd", passwd + "\n", 0o644, 0, 0);
+    await this.write("/etc/shadow", shadow + "\n", 0o000, 0, 0);
     await this.write("/etc/group", group + "\n", 0o644, 0, 0);
   }
 

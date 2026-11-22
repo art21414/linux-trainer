@@ -75,7 +75,7 @@ export async function createServer(): Promise<World> {
   const w = new World();
   const sys: [string, number][] = [
     ["root", 0], ["bin", 1], ["daemon", 2], ["sys", 3], ["adm", 4], ["tty", 5], ["disk", 6], ["wheel", 10],
-    ["users", 100], ["sshd", 74], ["nobody", 65534],
+    ["users", 100], ["mail", 12], ["sshd", 74], ["nobody", 65534],
   ];
   for (const [name, gid] of sys) w.addGroup(name, gid);
   await w.mkdir("/root", 0o550);
@@ -92,6 +92,24 @@ export async function createServer(): Promise<World> {
     await w.base.rm(`/${lnk}`, { recursive: true, force: true });
     await w.base.symlink(`usr/${tgt}`, `/${lnk}`);
   }
+  await w.mkdir("/var/spool/mail", 0o775);
+  await w.mkdir("/etc/skel", 0o755);
+  await w.mkdir("/etc/sudoers.d", 0o750);
+  await w.write("/etc/skel/.bash_logout", "# ~/.bash_logout\n", 0o644);
+  await w.write("/etc/skel/.bash_profile", "# .bash_profile\n\n# Get the aliases and functions\nif [ -f ~/.bashrc ]; then\n\t. ~/.bashrc\nfi\n\n# User specific environment and startup programs\n", 0o644);
+  await w.write(
+    "/etc/skel/.bashrc",
+    '# .bashrc\n\n# Source global definitions\nif [ -f /etc/bashrc ]; then\n\t. /etc/bashrc\nfi\n\n# User specific environment\nif ! [[ "$PATH" =~ "$HOME/.local/bin:$HOME/bin:" ]]\nthen\n    PATH="$HOME/.local/bin:$HOME/bin:$PATH"\nfi\nexport PATH\n\n# Uncomment the following line if you don\'t like systemctl\'s auto-paging feature:\n# export SYSTEMD_PAGER=\n\n# User specific aliases and functions\nif [ -d ~/.bashrc.d ]; then\n\tfor rc in ~/.bashrc.d/*; do\n\t\tif [ -f "$rc" ]; then\n\t\t\t. "$rc"\n\t\tfi\n\tdone\nfi\n\nunset rc\n',
+    0o644,
+  );
+  await w.write("/etc/profile", "# /etc/profile\n\n# System wide environment and startup programs, for login setup\n# Functions and aliases go in /etc/bashrc\n\nHISTSIZE=1000\nexport HISTSIZE\n", 0o644);
+  await w.write("/etc/bashrc", "# /etc/bashrc\n\n# System wide functions and aliases\n# Environment stuff goes in /etc/profile\n", 0o644);
+  await w.write(
+    "/etc/login.defs",
+    "MAIL_DIR\t/var/spool/mail\nUMASK\t\t022\nHOME_MODE\t0700\nPASS_MAX_DAYS\t99999\nPASS_MIN_DAYS\t0\nPASS_WARN_AGE\t7\nUID_MIN                  1000\nUID_MAX                 60000\nSYS_UID_MIN               201\nSYS_UID_MAX               999\nGID_MIN                  1000\nGID_MAX                 60000\nSYS_GID_MIN               201\nSYS_GID_MAX               999\nENCRYPT_METHOD SHA512\nUSERGROUPS_ENAB yes\nCREATE_HOME\tyes\n",
+    0o644,
+  );
+  await w.write("/etc/sudoers", "## Sudoers allows particular users to run various commands as\n## the root user, without needing the root password.\n\nroot\tALL=(ALL) \tALL\n\n## Allows people in group wheel to run all commands\n%wheel\tALL=(ALL)\tALL\n\n## Read drop-in files from /etc/sudoers.d (the # here does not mean a comment)\n#includedir /etc/sudoers.d\n", 0o440);
   await w.addUser("root", { uid: 0, gid: 0, home: "/root", comment: "root", createHome: false });
   await w.addUser("bin", { uid: 1, gid: 1, home: "/bin", shell: "/sbin/nologin", comment: "bin", createHome: false });
   await w.addUser("daemon", { uid: 2, gid: 2, home: "/sbin", shell: "/sbin/nologin", comment: "daemon", createHome: false });
@@ -108,7 +126,6 @@ export async function createServer(): Promise<World> {
     "/etc/os-release",
     'NAME="Rocky Linux"\nVERSION="9.6 (Blue Onyx)"\nID="rocky"\nID_LIKE="rhel centos fedora"\nVERSION_ID="9.6"\nPRETTY_NAME="Rocky Linux 9.6 (Blue Onyx)"\n',
   );
-  await w.write("/etc/shadow", "root:!::0:99999:7:::\nalice:$6$xyz::0:99999:7:::\nbob:$6$abc::0:99999:7:::\n", 0o000);
   await w.write("/etc/hosts", "127.0.0.1   localhost localhost.localdomain\n::1         localhost localhost.localdomain\n");
   await w.write("/etc/motd", "");
   await w.write("/var/log/messages", "Oct 26 08:00:01 server1 systemd[1]: Started Session 1 of User root.\n", 0o600);

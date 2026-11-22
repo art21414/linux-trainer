@@ -2,11 +2,12 @@
 import type { Exercise, PracticeSet, Section, Topic } from "../types";
 import { paths } from "./01-paths";
 import { createCopy } from "./02-create-copy";
+import { moveDelete } from "./03-move-delete";
 import { permissions } from "./20-permissions";
 
 // Каждая тема добавляет себя в свой раздел. Пустые разделы на экране не показываются.
 export const SECTIONS: Section[] = [
-  { id: "files", title: "Файлы и доступ", topics: [paths, createCopy, permissions] },
+  { id: "files", title: "Файлы и доступ", topics: [paths, createCopy, moveDelete, permissions] },
   { id: "search", title: "Поиск и потоки", topics: [] },
   { id: "disks", title: "Диски и файловые системы", topics: [] },
   { id: "procs", title: "Процессы", topics: [] },
