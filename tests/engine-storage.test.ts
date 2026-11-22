@@ -48,3 +48,19 @@ describe("storage", () => {
     expect((await s.run("df -h /data")).out).not.toMatch(/vdd/);
   });
 });
+
+describe("жёсткие ссылки и виртуальный размер", () => {
+  it("у второго имени тот же размер; место освобождается после удаления последнего имени", async () => {
+    const w = await createServer();
+    const s = new Shell(w, { user: "root" });
+    await w.storage.createFile("/tmp/big", "50M");
+    await s.run("ln /tmp/big /tmp/big2");
+    expect((await s.run("stat -c %s /tmp/big /tmp/big2")).out).toBe("52428800\n52428800\n");
+    const used = async () => Number((await s.run("df -B1 --output=used / | tail -1")).out.trim());
+    const before = await used();
+    await s.run("rm /tmp/big");
+    expect(await used()).toBe(before);
+    await s.run("rm /tmp/big2");
+    expect(before - (await used())).toBeGreaterThanOrEqual(50 * 1024 * 1024);
+  });
+});

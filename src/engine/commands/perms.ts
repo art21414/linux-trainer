@@ -113,7 +113,7 @@ function lookupGroup(w: World, s: string) {
 
 function makeOwnerCommand(w: World, name: "chown" | "chgrp"): Command {
   return defineCommand(name, async (args, ctx) => {
-    const p = parseArgs(args, { short: "RvcfhH", long: { recursive: "R", verbose: "v", changes: "c" } });
+    const p = parseArgs(args, { short: "RvcfhHLP", long: { recursive: "R", verbose: "v", changes: "c", "no-dereference": "h" } });
     if (p.bad) return fail(`${name}: invalid option -- '${p.bad.replace(/^-+/, "")}'\nTry '${name} --help' for more information.`);
     if (p.rest.length === 0) return fail(`${name}: missing operand\nTry '${name} --help' for more information.`);
     const [spec, ...files] = p.rest;
@@ -155,9 +155,11 @@ function makeOwnerCommand(w: World, name: "chown" | "chgrp"): Command {
         continue;
       }
       const paths = p.flags.has("R") ? w.subtree(abs) : [abs];
-      for (const path of paths) {
+      for (const orig of paths) {
+        // без -h chown/chgrp меняют цель симлинка, а не саму ссылку
+        const path = p.flags.has("h") ? orig : await w.resolveFinal(orig);
         const inf = (await w.info(path))!;
-        const shown = path === abs ? f : f.replace(/\/$/, "") + path.slice(abs.length);
+        const shown = orig === abs ? f : f.replace(/\/$/, "") + orig.slice(abs.length);
         const nu = uid ?? inf.uid;
         const ng = gid ?? inf.gid;
         let allowed = me.uid === 0;

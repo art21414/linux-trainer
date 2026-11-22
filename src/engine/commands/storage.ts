@@ -1,5 +1,6 @@
 // Диски и монтирование: lsblk, blkid, df, du, mount, umount, findmnt, mkfs.*, swapon, free,
 // truncate, fallocate, dd и systemctl daemon-reload. Вывод — как в Rocky Linux 9.
+import { serviceAction } from "./services";
 import { defineCommand } from "just-bash";
 import type { Command, ExecResult } from "just-bash";
 import type { World } from "../world";
@@ -485,7 +486,7 @@ function duCommand(w: World): Command {
         "human-readable": ["h", "none"], si: ["si", "none"], summarize: ["s", "none"], "one-file-system": ["x", "none"], exclude: ["exclude", "req"],
         time: ["time", "opt"], "block-size": ["B", "req"], "separate-dirs": ["S", "none"], dereference: ["L", "none"], version: ["V", "none"],
         "count-links": ["l", "none"], "null": ["0", "none"], "threshold": ["t", "req"], "dereference-args": ["D", "none"], "files0-from": ["files0-from", "req"],
-        "exclude-from": ["X", "req"], help: ["help", "none"],
+        "exclude-from": ["X", "req"], help: ["help", "none"], inodes: ["inodes", "none"],
       },
     });
     const e = optError("du", a) ?? notYet("du", a, ["S", "L", "D", "l", "P", "0", "t", "files0-from", "X", "H"]);
@@ -515,7 +516,8 @@ function duCommand(w: World): Command {
       if (!b) return res("", `du: invalid --block-size argument '${a.last("B")}'`, 1);
       unit = b.n;
     }
-    const fmt = (n: number) => (human ? humanCeil(n, human) : String(n === 0 ? 0 : Math.ceil(n / unit)));
+    const byInodes = a.has("inodes");
+    const fmt = (n: number) => (byInodes ? String(n) : human ? humanCeil(n, human) : String(n === 0 ? 0 : Math.ceil(n / unit)));
     const excludes = a.all("exclude").map(globToRe);
     const showTime = a.has("time");
     const timeFmt = (d: Date) => {
@@ -535,6 +537,7 @@ function duCommand(w: World): Command {
     };
 
     const walk = async (abs: string, display: string, depth: number, startMount: Mount, top: boolean): Promise<number | null> => {
+      if (abs === "/proc/.held") return null; // служебный каталог удалённых-но-открытых файлов
       const inf = await w.info(abs);
       if (!inf) return null;
       const m = st.mountFor(abs);
@@ -567,7 +570,8 @@ function duCommand(w: World): Command {
         }
       }
       let own: number;
-      if (apparent) own = virt ? virt.apparent : inf.isDir ? st.dirApparent(m.fstype, entries, nameBytes) : inf.size;
+      if (byInodes) own = 1;
+      else if (apparent) own = virt ? virt.apparent : inf.isDir ? st.dirApparent(m.fstype, entries, nameBytes) : inf.size;
       else own = st.allocOf(m.fstype, inf.isLink ? "link" : inf.isDir ? "dir" : "file", inf.size, virt);
       total += own;
       if (depth <= maxDepth && (inf.isDir || a.has("a") || depth === 0)) emit(total, display, inf.mtime);
@@ -1217,6 +1221,8 @@ function systemctlStub(w: World, onUnsupported: (n: string) => void): Command {
       if (!isRoot(w)) return res("", "Failed to reload daemon: Interactive authentication required.", 1);
       return ok();
     }
+    const svc = sub ? serviceAction(w, sub, args.slice(args.indexOf(sub) + 1).filter((x) => !x.startsWith("-"))) : null;
+    if (svc) return res(svc.out, svc.err.replace(/\n$/, ""), svc.code);
     onUnsupported("systemctl");
     w.unsupported.push("systemctl");
     return res("", "systemctl: в RHEL такая команда есть, но тренажёр её пока не умеет (записал в журнал)", 127);

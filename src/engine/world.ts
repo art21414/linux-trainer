@@ -3,10 +3,12 @@
 // пользователей, umask и проверку доступа держим здесь.
 import { InMemoryFs } from "just-bash";
 import type { IFileSystem } from "just-bash";
-import { normalize, dirname } from "./path";
+import { normalize, dirname, setLinkReader } from "./path";
 import { InodeTable } from "./inodes";
 import { ProcTable } from "./procs";
 import { Storage } from "./storage";
+import { OpenFiles } from "./openfiles";
+import type { HoldOpts, HoldWho } from "./openfiles";
 
 export interface User {
   name: string;
@@ -16,7 +18,16 @@ export interface User {
   home: string;
   shell: string;
   comment: string;
+  /** Пароль открытым текстом (в /etc/shadow пишется фиктивный хеш). undefined — пароля нет (`!!`), "" — пустой. */
+  password?: string;
+  /** Учётная запись заблокирована (`usermod -L`, `passwd -l`): в shadow перед хешем «!». */
+  locked?: boolean;
+  /** Старение пароля (chage). lastChange — дни с 1970 (0 — «password must be changed»); -1 — не задано. */
+  aging?: { lastChange: number; min: number; max: number; warn: number; inactive: number; expire: number };
 }
+
+export const DAY_MS = 86400000;
+export const todayDays = () => Math.floor(Date.now() / DAY_MS);
 
 export interface Group {
   name: string;
@@ -38,6 +49,19 @@ export interface NodeInfo {
   isLink: boolean;
   size: number;
   mtime: Date;
+  /** Время последнего доступа (relatime, как на RHEL). */
+  atime: Date;
+  /** Время изменения метаданных/содержимого (chmod, chown, mv, запись). */
+  ctime: Date;
+  /** Время создания (birth, `stat %w`). */
+  birth: Date;
+}
+
+/** atime/ctime/birth по inode: у жёстких ссылок общие. mtime хранит ФС. */
+export interface Times {
+  atime: Date;
+  ctime: Date;
+  birth: Date;
 }
 
 export type Perm = "r" | "w" | "x";
@@ -55,6 +79,17 @@ export class FsError extends Error {
     super(`${code}: ${text[code] ?? code}, ${op} '${path}'`);
     this.code = code;
   }
+}
+
+/** Служба systemd в модели: процесс, который можно перезапустить (`systemctl restart`). */
+export interface ServiceInfo {
+  unit: string;
+  cmd: string;
+  /** Имя пользователя или uid. */
+  user: string | number;
+  pid: number;
+  /** Имя процесса (comm), если оно не совпадает с первым словом команды. */
+  comm?: string;
 }
 
 export interface PendingSu {
@@ -82,6 +117,17 @@ export class World {
   unsupported: string[] = [];
   /** inode и жёсткие ссылки (см. inodes.ts). */
   readonly inodes = new InodeTable();
+  /** atime/ctime/birth по номеру inode. У файлов из setup записи нет — тогда все времена равны mtime. */
+  readonly times = new Map<number, Times>();
+  /**
+   * Интерактивный ввод ответа на вопрос команды (`rm -i`, `cp -i`): ставит экран терминала.
+   * null — ввода нет (тесты, скрипты): вопрос получает ответ «нет» (EOF), как у настоящего rm без tty.
+   */
+  readLine: ((prompt: string) => Promise<string | null>) | null = null;
+  /** Открытые файлы процессов и удалённые-но-открытые (см. openfiles.ts). */
+  readonly files = new OpenFiles(this);
+  /** Службы (unit без «.service») → процесс; `systemctl restart/stop/start` работает с ними. */
+  readonly services = new Map<string, ServiceInfo>();
   /** Таблица процессов (см. procs.ts). */
   readonly procs: ProcTable = new ProcTable(this);
   /** Диски, ФС, монтирование, учёт места (см. storage.ts). */
@@ -95,6 +141,25 @@ export class World {
 
   constructor() {
     this.fs = this.makeGuardedFs();
+    this.activatePaths();
+  }
+
+  /** Подключить к path.ts синхронный читатель симлинков этого мира (resolve() раскрывает ссылки как ядро). */
+  activatePaths(): void {
+    const data = (this.base as unknown as { data?: Map<string, { type: string; target?: string }> }).data;
+    setLinkReader(data ? (p) => {
+      const e = data.get(p);
+      return e && e.type === "symlink" && e.target !== undefined ? e.target : null;
+    } : null);
+  }
+
+  /**
+   * Для заданий: процесс (pid, имя службы или { service, cmd, user }) держит файл открытым. Если потом файл удалить,
+   * место не освободится (df видит, du — нет), а в /proc/PID/fd/N будет «путь (deleted)».
+   * Пример: `const {pid, fd} = await w.holdOpen("rsyslogd", "/var/log/big.log")`.
+   */
+  holdOpen(who: HoldWho, path: string, opts?: HoldOpts): Promise<{ pid: number; fd: number }> {
+    return this.files.hold(who, path, opts);
   }
 
   // ---------- пользователи и группы ----------
@@ -146,12 +211,12 @@ export class World {
 
   async addUser(
     name: string,
-    opts: { uid?: number; gid?: number; groups?: string[]; home?: string; shell?: string; comment?: string; createHome?: boolean } = {},
+    opts: { uid?: number; gid?: number; groups?: string[]; home?: string; shell?: string; comment?: string; createHome?: boolean; system?: boolean } = {},
   ): Promise<User> {
-    const uid = opts.uid ?? this.nextId([...this.users.values()].map((u) => u.uid));
+    const uid = opts.uid ?? (opts.system ? this.sysId([...this.users.values()].map((u) => u.uid)) : this.nextId([...this.users.values()].map((u) => u.uid)));
     let gid = opts.gid;
     if (gid === undefined) {
-      const g = this.groups.get(name) ?? this.addGroup(name, this.groupByGid(uid) ? undefined : uid);
+      const g = this.groups.get(name) ?? this.addGroup(name, this.groupByGid(uid) ? (opts.system ? this.sysId([...this.groups.values()].map((x) => x.gid)) : undefined) : uid);
       gid = g.gid;
     }
     const u: User = {
@@ -165,19 +230,77 @@ export class World {
     };
     this.users.set(name, u);
     if (opts.createHome !== false) {
-      await this.mkdir(u.home, 0o700, uid, gid);
-      for (const f of [".bash_logout", ".bash_profile", ".bashrc"]) {
-        await this.write(`${u.home}/${f}`, `# ${f}\n`, 0o644, uid, gid);
-      }
+      await this.mkdir(u.home, parseInt(await this.loginDef("HOME_MODE", "0700"), 8), uid, gid);
+      await this.copySkel(u.home, uid, gid);
     }
     await this.syncEtc();
     return u;
   }
 
-  private nextId(used: number[]): number {
-    let id = 1000;
+  private nextId(used: number[], min = 1000): number {
+    let id = min;
     while (used.includes(id)) id++;
     return id;
+  }
+
+  private sysId(used: number[]): number {
+    let id = 999;
+    while (used.includes(id) && id > 200) id--;
+    return id;
+  }
+
+  /** Содержимое /etc/skel → домашний каталог (как useradd -m). */
+  async copySkel(home: string, uid: number, gid: number, skel = "/etc/skel"): Promise<void> {
+    const walk = async (from: string, to: string) => {
+      let names: string[] = [];
+      try {
+        names = await this.base.readdir(from);
+      } catch {
+        return;
+      }
+      for (const n of names) {
+        const src = `${from}/${n}`;
+        const dst = `${to}/${n}`;
+        const st = await this.base.lstat(src);
+        if (st.isDirectory) {
+          await this.mkdir(dst, st.mode & 0o7777, uid, gid);
+          await walk(src, dst);
+        } else if (st.isFile) await this.write(dst, await this.base.readFile(src), st.mode & 0o7777, uid, gid);
+      }
+    };
+    await walk(skel, home);
+  }
+
+  /** Значение из /etc/login.defs (или запасное). */
+  async loginDef(key: string, fallback: string): Promise<string> {
+    const text = (await this.read("/etc/login.defs")) ?? "";
+    const m = new RegExp(`^${key}\\s+(\\S+)`, "m").exec(text);
+    return m ? m[1] : fallback;
+  }
+
+  /** Задать пароль (для заданий: `await world.setPassword("bob", "secret")`). */
+  async setPassword(name: string, password: string): Promise<void> {
+    const u = this.users.get(name);
+    if (!u) return;
+    u.password = password;
+    this.agingOf(u).lastChange = todayDays();
+    await this.syncEtc();
+  }
+
+  agingOf(u: User): NonNullable<User["aging"]> {
+    return (u.aging ??= { lastChange: todayDays(), min: 0, max: 99999, warn: 7, inactive: -1, expire: -1 });
+  }
+
+  /** Фиктивный SHA-512-хеш: стабилен для одного пароля. */
+  hashOf(pw: string): string {
+    let h = 2166136261;
+    const out: string[] = [];
+    const alpha = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    for (let i = 0; i < 102; i++) {
+      h = Math.imul(h ^ (pw.charCodeAt(i % Math.max(1, pw.length)) || 0) ^ i, 16777619) >>> 0;
+      out.push(alpha[h % 64]);
+    }
+    return `$6$${out.slice(0, 16).join("")}$${out.slice(16).join("").slice(0, 86)}`;
   }
 
   /** Перегенерировать /etc/passwd и /etc/group из модели. */
@@ -193,7 +316,17 @@ export class World {
         return `${g.name}:x:${g.gid}:${members.join(",")}`;
       })
       .join("\n");
+    const shadow = [...this.users.values()]
+      .sort((a, b) => a.uid - b.uid)
+      .map((u) => {
+        const a = this.agingOf(u);
+        const field = u.password === undefined ? (u.uid < 1000 && u.uid !== 0 ? "*" : "!!") : u.password === "" ? "" : this.hashOf(u.password);
+        const f = u.locked && !field.startsWith("!") && field !== "*" ? "!" + field : field;
+        return `${u.name}:${f}:${a.lastChange}:${a.min}:${a.max}:${a.warn}:${a.inactive < 0 ? "" : a.inactive}:${a.expire < 0 ? "" : a.expire}:`;
+      })
+      .join("\n");
     await this.write("/etc/passwd", passwd + "\n", 0o644, 0, 0);
+    await this.write("/etc/shadow", shadow + "\n", 0o000, 0, 0);
     await this.write("/etc/group", group + "\n", 0o644, 0, 0);
   }
 
@@ -207,7 +340,17 @@ export class World {
     const p = normalize(path);
     try {
       const s = follow ? await this.base.stat(p) : await this.base.lstat(p);
-      const o = this.owner(p);
+      // stat() по ссылке: владелец, времена и «виртуальный» размер — у цели, а не у самой ссылки
+      let mp = p;
+      if (follow) {
+        try {
+          if ((await this.base.lstat(p)).isSymbolicLink) mp = await this.resolveFinal(p);
+        } catch {
+          /* нет файла */
+        }
+      }
+      const o = this.owner(mp);
+      const t = this.timesOf(mp, s.mtime);
       return {
         path: p,
         mode: s.mode & 0o7777,
@@ -216,12 +359,141 @@ export class World {
         isDir: s.isDirectory,
         isFile: s.isFile,
         isLink: s.isSymbolicLink,
-        size: this.storage.virt.get(p)?.apparent ?? s.size,
+        size: this.storage.virt.get(mp)?.apparent ?? s.size,
         mtime: s.mtime,
+        atime: t.atime,
+        ctime: t.ctime,
+        birth: t.birth,
       };
     } catch {
       return null;
     }
+  }
+
+  // ---------- atime / ctime ----------
+
+  /** Времена файла: сохранённые или (для файлов из setup) равные mtime. */
+  timesOf(path: string, mtime: Date): Times {
+    return this.times.get(this.inodes.ino(path)) ?? { atime: mtime, ctime: mtime, birth: mtime };
+  }
+
+  /** Записать времена в таблицу (создать запись из текущих значений, если её не было). */
+  private async entry(path: string): Promise<Times | null> {
+    const p = normalize(path);
+    const ino = this.inodes.ino(p);
+    let t = this.times.get(ino);
+    if (!t) {
+      try {
+        const st = await this.base.lstat(p);
+        t = { atime: st.mtime, ctime: st.mtime, birth: st.mtime };
+        this.times.set(ino, t);
+      } catch {
+        return null;
+      }
+    }
+    return t;
+  }
+
+  /** Подготовить файл к изменению: зафиксировать его текущие atime/ctime до того, как ФС поменяет mtime. */
+  async ensureTimes(path: string): Promise<void> {
+    await this.entry(path);
+  }
+
+  async ensureTimesGet(path: string): Promise<Times | null> {
+    return this.entry(path);
+  }
+
+  /** Новый объект: все три времени = сейчас (mtime ставит сама ФС). */
+  stampCreate(path: string, now = new Date()): void {
+    this.times.set(this.inodes.ino(path), { atime: now, ctime: now, birth: now });
+  }
+
+  /** chmod/chown/mv/запись: ctime = сейчас. */
+  async stampChange(path: string, now = new Date()): Promise<void> {
+    const t = await this.entry(path);
+    if (t) t.ctime = now;
+  }
+
+  /** Чтение: atime по правилам relatime (обновляем, если atime не новее mtime/ctime или старше суток). */
+  async stampRead(path: string, now = new Date()): Promise<void> {
+    const p = normalize(path);
+    try {
+      const st = await this.base.stat(p);
+      const t = await this.entry(p);
+      if (!t) return;
+      if (t.atime <= st.mtime || t.atime <= t.ctime || now.getTime() - t.atime.getTime() >= 86400000) t.atime = now;
+    } catch {
+      /* нет файла */
+    }
+  }
+
+  /** В каталоге появилась/исчезла запись: mtime и ctime каталога = сейчас. */
+  async stampDirEntry(dir: string, now = new Date()): Promise<void> {
+    const d = normalize(dir);
+    const t = await this.entry(d);
+    if (!t) return;
+    try {
+      const st = await this.base.stat(d);
+      await this.base.utimes(d, st.mtime, now);
+    } catch {
+      return;
+    }
+    t.ctime = now;
+  }
+
+  /** Задать atime и/или mtime (touch, utimes). ctime при этом = сейчас. */
+  async setTimes(path: string, times: { atime?: Date; mtime?: Date }, now = new Date()): Promise<void> {
+    const p = normalize(path);
+    const t = await this.entry(p);
+    if (!t) return;
+    const st = await this.base.stat(p);
+    if (times.mtime) await this.base.utimes(p, times.mtime, times.mtime);
+    else await this.base.utimes(p, st.mtime, st.mtime);
+    if (times.atime) t.atime = times.atime;
+    t.ctime = now;
+  }
+
+  /** Если последний компонент пути — симлинк, вернуть путь его цели (цепочка до 40 звеньев), как делают open() и chmod(). */
+  async resolveFinal(path: string): Promise<string> {
+    let cur = normalize(path);
+    for (let i = 0; i < 40; i++) {
+      let st;
+      try {
+        st = await this.base.lstat(cur);
+      } catch {
+        return cur;
+      }
+      if (!st.isSymbolicLink) return cur;
+      const t = await this.base.readlink(cur);
+      cur = t.startsWith("/") ? normalize(t) : normalize(dirname(cur) + "/" + t);
+    }
+    return cur;
+  }
+
+  /** Размер каталога как на XFS (short-form): 6 байт + имя + 8 на запись; от 4096 — кратно блоку. */
+  async dirSize(path: string): Promise<number> {
+    try {
+      const n = (await this.base.readdir(normalize(path))).reduce((sum, e) => sum + e.length + 8, 6);
+      return n > 4096 ? Math.ceil(n / 4096) * 4096 : n;
+    } catch {
+      return 6;
+    }
+  }
+
+  /** Путь упирается в цикл симлинков (больше 40 переходов): ядро отвечает ELOOP. */
+  async isLoop(path: string): Promise<boolean> {
+    let cur = normalize(path);
+    for (let i = 0; i <= 40; i++) {
+      let t: string;
+      try {
+        if (!(await this.base.lstat(cur)).isSymbolicLink) return false;
+        t = await this.base.readlink(cur);
+      } catch {
+        return false;
+      }
+      cur = t.startsWith("/") ? normalize(t) : normalize(dirname(cur) + "/" + t);
+    }
+    return true;
   }
 
   async exists(path: string): Promise<boolean> {
@@ -255,20 +527,27 @@ export class World {
 
   async read(path: string): Promise<string | null> {
     try {
-      return await this.base.readFile(normalize(path));
+      const r = await this.base.readFile(normalize(path));
+      await this.stampRead(path);
+      return r;
     } catch {
       return null;
     }
   }
 
   async setMode(path: string, mode: number): Promise<void> {
+    path = await this.resolveFinal(path); // chmod всегда меняет цель симлинка, не саму ссылку
+    await this.ensureTimes(path);
     await this.base.chmod(normalize(path), mode);
     for (const n of this.inodes.names(path)) if (n !== normalize(path)) await this.base.chmod(n, mode);
+    await this.stampChange(path);
   }
 
   setOwner(path: string, uid: number, gid: number): void {
     this.owners.set(normalize(path), { uid, gid });
     for (const n of this.inodes.names(path)) this.owners.set(n, { uid, gid });
+    // ctime: запись создаётся лениво (setOwner синхронный), mtime файла берём как текущую точку отсчёта
+    void this.stampChange(path);
   }
 
   /** Все пути внутри каталога (включая сам каталог). */
@@ -346,6 +625,8 @@ export class World {
       if (!(await w.canModifyDir(dir))) deny(op, p);
     };
     const guardWriteOrCreate = async (p: string) => {
+      // как open(O_CREAT): без родительского каталога файл не создать
+      if (!(await base.exists(p)) && !(await base.exists(dirname(p)))) throw new FsError("ENOENT", "open", p);
       if (isRoot()) return;
       if (await base.exists(p)) {
         if (!(await w.canAccess(p, "w"))) deny("open", p);
@@ -360,6 +641,7 @@ export class World {
       // sticky bit: удалять может только владелец файла/каталога
       if (di && fi && di.mode & 0o1000 && w.cur.uid !== fi.uid && w.cur.uid !== di.uid) deny(op, p);
     };
+    const followFinal = (p: string) => w.resolveFinal(p);
     const onCreate = async (p: string, kind: "file" | "dir" | "link") => {
       const dir = dirname(p);
       const di = await w.info(dir, true);
@@ -369,6 +651,8 @@ export class World {
       w.inodes.create(p);
       if (kind === "file") await base.chmod(p, 0o666 & ~w.umask);
       if (kind === "dir") await base.chmod(p, (0o777 & ~w.umask) | (setgid ? 0o2000 : 0));
+      w.stampCreate(p);
+      await w.stampDirEntry(dir);
     };
     const dropTree = (p: string) => {
       const prefix = p === "/" ? "/" : p + "/";
@@ -386,31 +670,50 @@ export class World {
     const hooks: Record<string, (...a: any[]) => Promise<unknown>> = {
       async readFile(p: string, o?: unknown) {
         await guardRead(normalize(p));
-        return base.readFile(p, o as never);
+        const r = await base.readFile(p, o as never);
+        await w.stampRead(await followFinal(normalize(p)));
+        return r;
       },
       async readFileBytes(p: string) {
         await guardRead(normalize(p));
-        return base.readFileBytes(p);
+        const r = await base.readFileBytes(p);
+        await w.stampRead(await followFinal(normalize(p)));
+        return r;
       },
       async readFileBuffer(p: string) {
         await guardRead(normalize(p));
-        return base.readFileBuffer(p);
+        const r = await base.readFileBuffer(p);
+        await w.stampRead(await followFinal(normalize(p)));
+        return r;
       },
       async writeFile(p: string, c: unknown, o?: unknown) {
-        const n = normalize(p);
+        const n = await followFinal(normalize(p));
         const existed = await base.exists(n);
         await guardWriteOrCreate(n);
-        await base.writeFile(p, c as never, o as never);
+        if (existed) await w.ensureTimes(n);
+        const oldMode = existed ? (await base.stat(n)).mode : 0;
+        await base.writeFile(n, c as never, o as never);
+        if (existed) await base.chmod(n, oldMode & 0o7777); // перезапись на месте сохраняет права (InMemoryFs сбрасывает в 0644)
+        w.storage.virt.delete(n); // запись заменила содержимое: «виртуальный» размер больше не действует
         if (!existed) await onCreate(n, "file");
-        else await syncLinks(n);
+        else {
+          await w.stampChange(n);
+          await syncLinks(n);
+        }
       },
       async appendFile(p: string, c: unknown, o?: unknown) {
-        const n = normalize(p);
+        const n = await followFinal(normalize(p));
         const existed = await base.exists(n);
         await guardWriteOrCreate(n);
-        await base.appendFile(p, c as never, o as never);
+        if (existed) await w.ensureTimes(n);
+        const oldMode = existed ? (await base.stat(n)).mode : 0;
+        await base.appendFile(n, c as never, o as never);
+        if (existed) await base.chmod(n, oldMode & 0o7777); // перезапись на месте сохраняет права (InMemoryFs сбрасывает в 0644)
         if (!existed) await onCreate(n, "file");
-        else await syncLinks(n);
+        else {
+          await w.stampChange(n);
+          await syncLinks(n);
+        }
       },
       async createExclusive(p: string, o: { mode: number; directory?: boolean }) {
         const n = normalize(p);
@@ -435,19 +738,32 @@ export class World {
       async readdir(p: string) {
         const n = normalize(p);
         if (!isRoot() && (await base.exists(n)) && !(await w.canAccess(n, "r"))) deny("scandir", n);
-        return base.readdir(p);
+        const r = await base.readdir(p);
+        await w.stampRead(n);
+        return r;
       },
       async readdirWithFileTypes(p: string) {
         const n = normalize(p);
         if (!isRoot() && (await base.exists(n)) && !(await w.canAccess(n, "r"))) deny("scandir", n);
-        return base.readdirWithFileTypes(p);
+        const r = await base.readdirWithFileTypes(p);
+        await w.stampRead(n);
+        return r;
       },
       async rm(p: string, o?: { recursive?: boolean; force?: boolean }) {
         const n = normalize(p);
         if (n === "/") deny("rm", n);
         await guardDelete(n);
-        await base.rm(p, o as never);
-        dropTree(n);
+        const others = (await base.exists(n)) ? w.inodes.names(n).filter((x) => x !== n) : [];
+        await w.ensureTimes(dirname(n));
+        // файл, открытый процессом, «переезжает» в /proc/.held: имя исчезает, место остаётся занятым
+        const target = await w.info(n);
+        const kept = target && !target.isDir ? await w.files.onUnlink(n) : (await w.files.onUnlinkTree(n), false);
+        if (!kept) {
+          await base.rm(p, o as never);
+          dropTree(n);
+        }
+        await w.stampDirEntry(dirname(n));
+        for (const x of others) await w.stampChange(x); // число ссылок изменилось
       },
       async cp(src: string, dest: string, o?: { recursive?: boolean }) {
         const s = normalize(src);
@@ -460,8 +776,10 @@ export class World {
           if (!before.has(x) || x === d) {
             w.owners.set(x, { uid: w.cur.uid, gid: w.cur.gid });
             w.inodes.create(x);
+            w.stampCreate(x);
           }
         }
+        await w.stampDirEntry(dirname(d));
       },
       async mv(src: string, dest: string) {
         const s = normalize(src);
@@ -473,18 +791,26 @@ export class World {
         const moved: [string, Owner][] = [];
         const prefix = s + "/";
         for (const [k, v] of w.owners) if (k === s || k.startsWith(prefix)) moved.push([k, v]);
+        await w.ensureTimes(s);
+        await w.ensureTimes(dirname(s));
+        await w.ensureTimes(dirname(d));
         await base.mv(src, dest);
         for (const [k] of moved) w.owners.delete(k);
         const finalDest = (await base.exists(d)) ? d : normalize(dest);
         w.inodes.rename(s, finalDest);
         for (const [k, v] of moved) w.owners.set(finalDest + k.slice(s.length), v);
+        await w.stampChange(finalDest); // rename меняет ctime файла, но не его mtime
+        await w.stampDirEntry(dirname(s));
+        if (dirname(d) !== dirname(s)) await w.stampDirEntry(dirname(d));
       },
       async chmod(p: string, mode: number) {
-        const n = normalize(p);
+        const n = await followFinal(normalize(p));
         const inf = await w.info(n, true);
         if (inf && !isRoot() && inf.uid !== w.cur.uid) throw new FsError("EPERM", "chmod", n);
-        await base.chmod(p, mode);
+        await w.ensureTimes(n);
+        await base.chmod(n, mode);
         for (const o of w.inodes.names(n)) if (o !== n) await base.chmod(o, mode);
+        await w.stampChange(n);
       },
       async symlink(target: string, link: string) {
         const n = normalize(link);
@@ -495,10 +821,14 @@ export class World {
       async link(existing: string, np: string) {
         const n = normalize(np);
         await guardCreate(n, "link");
+        await w.ensureTimes(existing);
+        await w.ensureTimes(dirname(n));
         await base.link(existing, np);
         const o = w.owner(existing);
         w.owners.set(n, o);
         w.inodes.link(normalize(existing), n);
+        await w.stampChange(n); // ctime общего inode: число ссылок выросло
+        await w.stampDirEntry(dirname(n));
       },
       async utimes(p: string, a: Date, m: Date) {
         const n = normalize(p);
@@ -506,7 +836,13 @@ export class World {
           const inf = await w.info(n, true);
           if (inf && inf.uid !== w.cur.uid && !(await w.canAccess(n, "w"))) deny("utime", n);
         }
-        return base.utimes(p, a, m);
+        await w.ensureTimes(n);
+        await base.utimes(p, a, m);
+        const t = await w.ensureTimesGet(n);
+        if (t) {
+          t.atime = a;
+          t.ctime = new Date();
+        }
       },
       async stat(p: string) {
         const n = normalize(p);

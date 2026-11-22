@@ -3,7 +3,7 @@ import type { World } from "./world";
 import { MEM_TOTAL_KB } from "./procs";
 import type { Proc } from "./procs";
 
-const synced = new WeakMap<World, { version: number; pids: Set<number> }>();
+const synced = new WeakMap<World, { version: number; pids: Set<number>; fdSig: Map<number, string> }>();
 
 const STATE_TEXT: Record<string, string> = { R: "R (running)", S: "S (sleeping)", D: "D (disk sleep)", T: "T (stopped)", Z: "Z (zombie)", I: "I (idle)" };
 
@@ -97,7 +97,7 @@ function meminfo(w: World): string {
 
 /** Пересобрать /proc, если таблица процессов изменилась (или force). */
 export async function syncProc(w: World, force = false): Promise<void> {
-  const st = synced.get(w) ?? { version: -1, pids: new Set<number>() };
+  const st = synced.get(w) ?? { version: -1, pids: new Set<number>(), fdSig: new Map<number, string>() };
   const P = w.procs;
   if (!force && st.version === P.version && st.pids.size) return;
   const procs = P.list();
@@ -107,6 +107,7 @@ export async function syncProc(w: World, force = false): Promise<void> {
       await w.base.rm(`/proc/${pid}`, { recursive: true, force: true });
       for (const k of [...w.owners.keys()]) if (k === `/proc/${pid}` || k.startsWith(`/proc/${pid}/`)) w.owners.delete(k);
       w.inodes.forgetTree(`/proc/${pid}`);
+      st.fdSig.delete(pid);
     }
   }
   await w.mkdir("/proc", 0o555);
@@ -135,13 +136,35 @@ export async function syncProc(w: World, force = false): Promise<void> {
     for (const [name, target] of [["cwd", p.cwd], ["exe", p.exe]] as const) {
       if (!target || p.kernel) continue;
       const lp = `${d}/${name}`;
-      if (!(await w.base.exists(lp))) await w.base.symlink(target, lp);
+      if (!(await w.info(lp))) await w.base.symlink(target, lp); // lstat: ссылка на несуществующий файл — всё равно ссылка
     }
   }
-  const self = "/proc/self";
-  if (await w.exists(self)) await w.base.rm(self, { force: true });
-  if (w.shellPid) await w.base.symlink(String(w.shellPid), self);
+  for (const p of procs) if (!p.kernel && p.state !== "Z") await syncFds(w, p, st.fdSig);
+  // /proc/self — каталог, который ведёт storage.ts (mounts, mountinfo): symlink на pid не создаём
   st.version = P.version;
   st.pids = alive;
   synced.set(w, st);
+}
+
+/** /proc/PID/fd: стандартные 0–2 и открытые файлы процесса; у удалённых цель — служебный путь (ls/readlink показывают «(deleted)»). */
+async function syncFds(w: World, p: Proc, sigs: Map<number, string>): Promise<void> {
+  const dir = `/proc/${p.pid}/fd`;
+  const std: [number, string, "r" | "w" | "rw"][] = p.tty.startsWith("pts/")
+    ? [[0, `/dev/${p.tty}`, "rw"], [1, `/dev/${p.tty}`, "rw"], [2, `/dev/${p.tty}`, "rw"]]
+    : [[0, "/dev/null", "r"], [1, "/dev/null", "w"], [2, "/dev/null", "w"]];
+  const extra = w.files.list(p.pid).map((e): [number, string, "r" | "w" | "rw"] => [e.fd, e.held ?? e.path, e.mode === "r" ? "r" : e.mode === "rw" ? "rw" : "w"]);
+  const all = [...std, ...extra];
+  const sig = all.map((x) => x.join(":")).join("|");
+  if (sigs.get(p.pid) === sig && (await w.base.exists(dir))) return;
+  await w.base.rm(dir, { recursive: true, force: true });
+  for (const k of [...w.owners.keys()]) if (k === dir || k.startsWith(dir + "/")) w.owners.delete(k);
+  await w.mkdir(dir, 0o500, p.uid, p.gid);
+  for (const [fd, target, mode] of all) {
+    const lp = `${dir}/${fd}`;
+    await w.base.symlink(target, lp);
+    await w.base.chmod(lp, mode === "r" ? 0o500 : mode === "w" ? 0o300 : 0o700);
+    w.owners.set(lp, { uid: p.uid, gid: p.gid });
+    w.storage.virt.set(lp, { apparent: 64, alloc: 0 });
+  }
+  sigs.set(p.pid, sig);
 }

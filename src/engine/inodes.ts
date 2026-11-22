@@ -6,6 +6,8 @@ import { normalize } from "./path";
 export class InodeTable {
   private byPath = new Map<string, number>();
   private byIno = new Map<number, Set<string>>();
+  /** Освобождённые номера: как в XFS, новый файл получает наименьший свободный (rm + touch дают прежний номер). */
+  private freed: number[] = [];
   private next = 50331777; // как на корневой xfs свежего сервера
 
   /** Выдать номер (если у пути его ещё нет). */
@@ -13,8 +15,13 @@ export class InodeTable {
     const p = normalize(path);
     let n = this.byPath.get(p);
     if (n === undefined) {
-      n = this.next;
-      this.next += 1 + ((n * 7) % 5);
+      if (this.freed.length) {
+        const min = Math.min(...this.freed);
+        n = min;
+      } else {
+        n = this.next;
+        this.next += 1 + ((n * 7) % 5);
+      }
       this.attach(p, n);
     }
     return n;
@@ -22,6 +29,8 @@ export class InodeTable {
 
   private attach(p: string, n: number): void {
     this.byPath.set(p, n);
+    const fi = this.freed.indexOf(n);
+    if (fi >= 0) this.freed.splice(fi, 1);
     let s = this.byIno.get(n);
     if (!s) this.byIno.set(n, (s = new Set()));
     s.add(p);
@@ -50,7 +59,10 @@ export class InodeTable {
     this.byPath.delete(p);
     const s = this.byIno.get(n);
     s?.delete(p);
-    if (s && !s.size) this.byIno.delete(n);
+    if (s && !s.size) {
+      this.byIno.delete(n);
+      this.freed.push(n);
+    }
   }
 
   /** Удалено поддерево (rm -r). */
