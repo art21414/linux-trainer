@@ -748,3 +748,59 @@ describe("шаблоны имён (glob) и подстановки", () => {
     expect(await run(s, "X=v; echo ${X:?e}")).toBe("v\n");
   });
 });
+
+describe("симлинки в путях, ~user, usrmerge", () => {
+  async function app() {
+    const s = await sh();
+    await s.run("mkdir -p /srv/app/releases/v2/logs && touch /srv/app/releases/v2/logs/a.log && ln -s releases/v2 /srv/app/current");
+    return s;
+  }
+
+  it("симлинк в середине пути раскрывается", async () => {
+    const s = await app();
+    expect((await s.run("ls /srv/app/current/logs")).out).toBe("a.log\n");
+    await s.run("cd /srv/app/current");
+    expect((await s.run("ls -l logs")).out).toMatch(/^total 0\n-rw-r--r--\. 1 root root 0 .* a\.log\n$/);
+  });
+
+  it("зашли через ссылку: . — это каталог, а не ссылка", async () => {
+    const s = await app();
+    await s.run("cd /srv/app/current");
+    expect((await s.run("ls -ld . | cat")).out).toMatch(/^drwxr-xr-x\. \d+ root root +\d+ .* \.\n$/);
+    const st = (await s.run("stat .")).out;
+    expect(st).toContain("  File: .\n");
+    expect(st).toContain("directory");
+    expect(st).not.toContain("->");
+  });
+
+  it("внешние команды видят .. физически, cd .. — логически", async () => {
+    const s = await app();
+    await s.run("cd /srv/app/current");
+    expect((await s.run("ls .. | cat")).out).toBe("v2\n");
+    await s.run("touch f && cp f ..");
+    expect((await s.run("ls /srv/app/releases | cat")).out).toBe("f\nv2\n");
+    expect((await s.run("cd .. && pwd")).out).toBe("/srv/app\n");
+    await s.run("cd /srv/app/current");
+    await s.run("cd -P ..");
+    expect((await s.run("pwd")).out).toBe("/srv/app/releases\n");
+  });
+
+  it("~user раскрывается из passwd", async () => {
+    const s = await sh();
+    expect((await s.run("echo ~alice ~bob ~root")).out).toBe("/home/alice /home/bob /root\n");
+    expect((await s.run("echo ~nobodyx")).out).toBe("~nobodyx\n");
+    expect((await s.run("echo '~alice' x~alice")).out).toBe("~alice x~alice\n");
+    await s.run("cd ~alice/");
+    expect((await s.run("pwd")).out).toBe("/home/alice\n");
+  });
+
+  it("usrmerge: /bin — ссылка на usr/bin, один inode", async () => {
+    const s = await sh();
+    expect((await s.run("ls -ld /bin /sbin /lib /lib64 | cat")).out.replace(/ \w{3} [ \d]\d \d\d:\d\d/g, "")).toBe(
+      "lrwxrwxrwx. 1 root root 7 /bin -> usr/bin\nlrwxrwxrwx. 1 root root 7 /lib -> usr/lib\nlrwxrwxrwx. 1 root root 9 /lib64 -> usr/lib64\nlrwxrwxrwx. 1 root root 8 /sbin -> usr/sbin\n",
+    );
+    const r = (await s.run("stat -c %i /bin/bash /usr/bin/bash")).out.split("\n");
+    expect(r[0]).toBe(r[1]);
+    expect((await s.run("readlink -f /bin/bash")).out).toBe("/usr/bin/bash\n");
+  });
+});

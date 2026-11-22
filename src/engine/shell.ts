@@ -18,6 +18,7 @@ import { procCommands } from "./commands/procs";
 import { syncProc } from "./procfs";
 import { registerBaseServices } from "./commands/services";
 import { fixGlobs } from "./globs";
+import { fixCdP, fixTilde } from "./expand";
 
 export type RunKind = "ok" | "error" | "notfound" | "unsupported" | "danger" | "sudo" | "clear" | "empty" | "su" | "exit";
 
@@ -80,6 +81,15 @@ export async function createServer(): Promise<World> {
   await w.mkdir("/tmp", 0o1777);
   await w.mkdir("/var/tmp", 0o1777);
   for (const d of ["/etc", "/srv", "/opt", "/mnt", "/var/log", "/usr/bin", "/usr/sbin", "/usr/share/doc", "/boot", "/media"]) await w.mkdir(d);
+  // usrmerge, как в Rocky 9: /bin, /sbin, /lib, /lib64 — символические ссылки в /usr
+  for (const [lnk, tgt] of [["bin", "bin"], ["sbin", "sbin"], ["lib", "lib"], ["lib64", "lib64"]]) {
+    await w.mkdir(`/usr/${tgt}`);
+    for (const e of (await w.base.exists(`/${lnk}`)) ? await w.base.readdir(`/${lnk}`) : []) {
+      if (!(await w.base.exists(`/usr/${tgt}/${e}`))) await w.base.writeFile(`/usr/${tgt}/${e}`, await w.base.readFile(`/${lnk}/${e}`));
+    }
+    await w.base.rm(`/${lnk}`, { recursive: true, force: true });
+    await w.base.symlink(`usr/${tgt}`, `/${lnk}`);
+  }
   await w.addUser("root", { uid: 0, gid: 0, home: "/root", comment: "root", createHome: false });
   await w.addUser("bin", { uid: 1, gid: 1, home: "/bin", shell: "/sbin/nologin", comment: "bin", createHome: false });
   await w.addUser("daemon", { uid: 2, gid: 2, home: "/sbin", shell: "/sbin/nologin", comment: "daemon", createHome: false });
@@ -233,7 +243,8 @@ export class Shell {
       const clobberOn = [...trimmed.matchAll(/(?:^|[;&|]\s*)set\s+(-[a-zA-Z]*C[a-zA-Z]*|\+[a-zA-Z]*C[a-zA-Z]*|-o\s+noclobber|\+o\s+noclobber)(?=\s|;|&|\||$)/g)].map((m) => m[1].startsWith("-"));
       const prefix = this.noclobber ? "set -C\n" : "";
       await syncProc(w);
-      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, trimmed, this.env)), { cwd: this.cwd, env: this.env });
+      w.activatePaths();
+      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, fixCdP(fixTilde(w, trimmed), this.cwd), this.env)), { cwd: this.cwd, env: this.env });
       if (clobberOn.length) this.noclobber = clobberOn[clobberOn.length - 1];
       stdout = r.stdout;
       stderr = r.stderr;

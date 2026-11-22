@@ -3,7 +3,7 @@
 // пользователей, umask и проверку доступа держим здесь.
 import { InMemoryFs } from "just-bash";
 import type { IFileSystem } from "just-bash";
-import { normalize, dirname } from "./path";
+import { normalize, dirname, setLinkReader } from "./path";
 import { InodeTable } from "./inodes";
 import { ProcTable } from "./procs";
 import { Storage } from "./storage";
@@ -132,6 +132,16 @@ export class World {
 
   constructor() {
     this.fs = this.makeGuardedFs();
+    this.activatePaths();
+  }
+
+  /** Подключить к path.ts синхронный читатель симлинков этого мира (resolve() раскрывает ссылки как ядро). */
+  activatePaths(): void {
+    const data = (this.base as unknown as { data?: Map<string, { type: string; target?: string }> }).data;
+    setLinkReader(data ? (p) => {
+      const e = data.get(p);
+      return e && e.type === "symlink" && e.target !== undefined ? e.target : null;
+    } : null);
   }
 
   /**
