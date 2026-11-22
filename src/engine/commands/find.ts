@@ -476,7 +476,7 @@ async function runFind(
       for (const nm of names) {
         if (quit) return;
         const cabs = e.abs === "/" ? "/" + nm : `${e.abs}/${nm}`;
-        const ci = await w.info(cabs, follow);
+        const ci = (await w.info(cabs, follow)) ?? (follow ? await w.info(cabs) : null); // -L: битая ссылка остаётся ссылкой
         if (!ci) continue;
         await visit({ path: joinPath(e.path, nm), abs: cabs, depth: e.depth + 1, inf: ci, name: nm, start: e.start }, startMountId);
       }
@@ -497,7 +497,7 @@ async function runFind(
 
   for (const s of starts) {
     const abs = resolve(ctx.cwd, s);
-    const inf = await w.info(abs, follow);
+    const inf = (await w.info(abs, follow)) ?? (follow ? await w.info(abs) : null);
     if (!inf || !(await w.canTraverse(abs))) {
       emitErr(`find: ${q(s)}: ${inf ? "Permission denied" : "No such file or directory"}\n`);
       exit = 1;
