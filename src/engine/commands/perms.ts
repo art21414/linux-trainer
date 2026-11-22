@@ -60,7 +60,17 @@ export function chmodCommand(w: World): Command {
     // режим вида -w / -x тоже допустим — отделяем его от опций
     const opts: string[] = [];
     const rest: string[] = [];
-    for (const a of args) {
+    let refFile: string | undefined;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a.startsWith("--reference=")) {
+        refFile = a.slice(12);
+        continue;
+      }
+      if (a === "--reference") {
+        refFile = args[++i] ?? "";
+        continue;
+      }
       if (/^-[rwxXst]+$/.test(a) && !/^-[Rvcf]+$/.test(a)) rest.push(a);
       else if (a.startsWith("-") && a.length > 1) opts.push(a);
       else rest.push(a);
@@ -68,7 +78,17 @@ export function chmodCommand(w: World): Command {
     const p = parseArgs(opts, { short: "Rvcf", long: { recursive: "R", verbose: "v", changes: "c", silent: "f", quiet: "f" } });
     if (p.bad) return fail(`chmod: invalid option -- '${p.bad.replace(/^-+/, "")}'\nTry 'chmod --help' for more information.`);
     if (rest.length === 0) return fail("chmod: missing operand\nTry 'chmod --help' for more information.");
-    const [spec, ...files] = rest;
+    let spec: string;
+    let files: string[];
+    if (refFile !== undefined) {
+      const ref = await w.info(resolve(ctx.cwd, refFile), true);
+      if (!ref) return fail(`chmod: failed to get attributes of '${refFile}': No such file or directory`);
+      spec = (ref.mode & 0o7777).toString(8);
+      files = rest;
+      if (!files.length) return fail("chmod: missing operand after ‘" + refFile + "’\nTry 'chmod --help' for more information.");
+    } else {
+      [spec, ...files] = rest;
+    }
     if (!files.length) return fail(`chmod: missing operand after ‘${spec}’\nTry 'chmod --help' for more information.`);
     if (applyMode(spec, 0o644, false, w.umask) === null) return fail(`chmod: invalid mode: ‘${spec}’\nTry 'chmod --help' for more information.`);
     let out = "";
@@ -96,7 +116,9 @@ export function chmodCommand(w: World): Command {
         if (p.flags.has("v") || (p.flags.has("c") && next !== inf.mode)) {
           const o = inf.mode.toString(8).padStart(4, "0");
           const n = next.toString(8).padStart(4, "0");
-          out += next === inf.mode ? `mode of '${shown}' retained as ${o}\n` : `mode of '${shown}' changed from ${o} to ${n}\n`;
+          const os = modeString({ mode: inf.mode, isDir: false, isLink: false }).slice(1);
+          const ns = modeString({ mode: next, isDir: false, isLink: false }).slice(1);
+          out += next === inf.mode ? `mode of '${shown}' retained as ${o} (${os})\n` : `mode of '${shown}' changed from ${o} (${os}) to ${n} (${ns})\n`;
         }
       }
     }
@@ -113,8 +135,20 @@ function lookupGroup(w: World, s: string) {
 
 function makeOwnerCommand(w: World, name: "chown" | "chgrp"): Command {
   return defineCommand(name, async (args, ctx) => {
-    const p = parseArgs(args, { short: "RvcfhHLP", long: { recursive: "R", verbose: "v", changes: "c", "no-dereference": "h" } });
+    let refFile: string | undefined;
+    const args2: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith("--reference=")) refFile = args[i].slice(12);
+      else if (args[i] === "--reference") refFile = args[++i] ?? "";
+      else args2.push(args[i]);
+    }
+    const p = parseArgs(args2, { short: "RvcfhHLP", long: { recursive: "R", verbose: "v", changes: "c", "no-dereference": "h" } });
     if (p.bad) return fail(`${name}: invalid option -- '${p.bad.replace(/^-+/, "")}'\nTry '${name} --help' for more information.`);
+    if (refFile !== undefined) {
+      const ref = await w.info(resolve(ctx.cwd, refFile), true);
+      if (!ref) return fail(`${name}: failed to get attributes of '${refFile}': No such file or directory`);
+      p.rest.unshift(name === "chgrp" ? String(ref.gid) : `${ref.uid}:${ref.gid}`);
+    }
     if (p.rest.length === 0) return fail(`${name}: missing operand\nTry '${name} --help' for more information.`);
     const [spec, ...files] = p.rest;
     if (!files.length) return fail(`${name}: missing operand after ‘${spec}’\nTry '${name} --help' for more information.`);
@@ -172,14 +206,16 @@ function makeOwnerCommand(w: World, name: "chown" | "chgrp"): Command {
         }
         w.setOwner(path, nu, ng);
         // смена владельца обычным файлом снимает setuid/setgid (как в Linux)
-        if (!inf.isDir && (nu !== inf.uid || ng !== inf.gid) && inf.mode & 0o6000 && me.uid !== 0) await w.setMode(path, inf.mode & ~0o6000);
+        // chown/chgrp снимают setuid (и setgid, если есть g+x) у обычных файлов — и у root тоже
+        if (!inf.isDir && inf.mode & 0o6000) await w.setMode(path, inf.mode & ~(0o4000 | (inf.mode & 0o010 ? 0o2000 : 0)));
         if (p.flags.has("v") || (p.flags.has("c") && (nu !== inf.uid || ng !== inf.gid))) {
           const un = (id: number) => w.userByUid(id)?.name ?? String(id);
           const gn = (id: number) => w.groupByGid(id)?.name ?? String(id);
-          out +=
-            nu === inf.uid && ng === inf.gid
-              ? `ownership of '${shown}' retained as ${un(nu)}:${gn(ng)}\n`
-              : `changed ownership of '${shown}' from ${un(inf.uid)}:${gn(inf.gid)} to ${un(nu)}:${gn(ng)}\n`;
+          if (name === "chgrp")
+            out += ng === inf.gid ? `group of '${shown}' retained as ${gn(ng)}\n` : `changed group of '${shown}' from ${gn(inf.gid)} to ${gn(ng)}\n`;
+          else if (nu === inf.uid && ng === inf.gid) out += `ownership of '${shown}' retained as ${un(nu)}${gid === undefined ? "" : ":" + gn(ng)}\n`;
+          else if (ng === inf.gid) out += `changed ownership of '${shown}' from ${un(inf.uid)} to ${un(nu)}\n`;
+          else out += `changed ownership of '${shown}' from ${un(inf.uid)}:${gn(inf.gid)} to ${un(nu)}:${gn(ng)}\n`;
         }
       }
     }
