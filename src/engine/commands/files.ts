@@ -320,14 +320,7 @@ export function lsCommand(w: World): Command {
     let err = "";
     let code = 0;
 
-    const dirSize = async (inf: NodeInfo) => {
-      try {
-        const n = (await w.base.readdir(inf.path)).reduce((sum, e) => sum + e.length + 9, 6);
-        return n > 4096 ? Math.ceil(n / 4096) * 4096 : n;
-      } catch {
-        return 6;
-      }
-    };
+    const dirSize = (inf: NodeInfo) => w.dirSize(inf.path);
     const blocksOf = (inf: NodeInfo) => (inf.isDir || inf.isLink ? 0 : Math.ceil(inf.size / 4096) * 4);
     const isBroken = async (inf: NodeInfo) => inf.isLink && !(await w.info(inf.path, true));
     const inoOf = (inf: NodeInfo) => String(w.inodes.ino(inf.path));
@@ -571,6 +564,7 @@ export function statCommand(w: World): Command {
         code = 1;
         continue;
       }
+      if (inf.isDir) inf.size = await w.dirSize(inf.path);
       const user = w.userByUid(inf.uid)?.name ?? "UNKNOWN";
       const group = w.groupByGid(inf.gid)?.name ?? "UNKNOWN";
       const links = await linkCount(w, inf);

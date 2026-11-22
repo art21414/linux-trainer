@@ -393,6 +393,16 @@ export class World {
     return cur;
   }
 
+  /** Размер каталога как на XFS (short-form): 6 байт + имя + 8 на запись; от 4096 — кратно блоку. */
+  async dirSize(path: string): Promise<number> {
+    try {
+      const n = (await this.base.readdir(normalize(path))).reduce((sum, e) => sum + e.length + 8, 6);
+      return n > 4096 ? Math.ceil(n / 4096) * 4096 : n;
+    } catch {
+      return 6;
+    }
+  }
+
   async exists(path: string): Promise<boolean> {
     return this.base.exists(normalize(path));
   }
