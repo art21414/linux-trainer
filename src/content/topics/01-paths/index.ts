@@ -9,6 +9,7 @@ const DAY = 24 * 60;
 const stamp = (w: World, path: string, mtimeMin: number, atimeMin = mtimeMin) =>
   w.setTimes(path, { mtime: ago(mtimeMin), atime: ago(atimeMin) });
 const bytes = (n: number) => "x".repeat(n - 1) + "\n";
+const REPORT = "Q3 revenue: 140\nQ3 costs: 95\nmargin: 32%\n";
 
 /** Содержимое /root/answer без краевых пробелов; null — файла нет. */
 async function answer(w: World): Promise<string | null> {
@@ -21,7 +22,9 @@ const namesOf = (a: string) =>
     .split("\n")
     .map((s) => s.trim())
     .filter((s) => s && !/^total \d+/.test(s))
-    .map((s) => s.split(/\s+/).pop()!.replace(/\/+$/, "").split("/").pop()!);
+    .map((s) => s.split(/\s+/).pop()!)
+    .filter((n) => n !== "." && n !== "..")
+    .map((n) => n.replace(/\/+$/, "").split("/").pop()!);
 /** Ответ — одно имя файла (допускается полный путь и строка ls -l). */
 const oneName = (a: string): string | null => {
   const n = namesOf(a);
@@ -94,13 +97,14 @@ export const paths: Topic = {
             const first = a.split("\n")[0].trim();
             if (first === "bob") return true;
             if (/^d/.test(first) && first.split(/\s+/)[2] === "bob") return true;
+            if (/Uid: \(\s*\d+\/\s*bob\)/.test(a)) return true;
             if (a.includes("alice"))
               return "alice — владелец файлов внутри: ls -l на каталог показывает его содержимое. Нужен сам каталог.";
             return "Не тот пользователь. Посмотри на сам каталог, а не на его содержимое.";
           },
           hint: "ls -l на каталог показывает файлы в нём. Нужен ключ, который покажет сам каталог.",
           solution: "ls -ld /srv/share > /root/answer",
-          accept: ["stat -c %U /srv/share > /root/answer", "echo bob > /root/answer"],
+          accept: ["stat -c %U /srv/share > /root/answer", "stat /srv/share > /root/answer", "echo bob > /root/answer"],
           reject: ["echo alice > /root/answer", "ls -l /srv/share > /root/answer"],
           explain:
             "`ls -l /srv/share` выводит содержимое — там файлы alice. Сам каталог показывает `ls -ld` (или `stat`): его владелец bob. При Permission denied на создание файла важны права каталога, а не файлов в нём.",
@@ -286,6 +290,8 @@ export const paths: Topic = {
           accept: [
             "ls -lL /srv/app/current > /root/answer",
             "ls -l /srv/app/releases/v2 > /root/answer",
+            "ls -la /srv/app/current/ > /root/answer",
+            "cd /srv/app/current\nls -l > /root/answer",
           ],
           reject: ["ls -l /srv/app/current > /root/answer", "ls /srv/app/current/ > /root/answer"],
           explain:
@@ -428,20 +434,26 @@ export const paths: Topic = {
       exercises: [
         {
           id: "paths-4-01",
-          type: "choice",
-          kind: "predict",
+          type: "terminal",
           theory: "symlinks",
-          prompt: "`current` — ссылка на `releases/v2`. Что выведет последняя команда?",
-          code: "$ cd /srv/app/current\n$ cp /tmp/hotfix.conf ..\n$ cd ..\n$ ls hotfix.conf",
-          options: [
-            "`ls: cannot access 'hotfix.conf': No such file or directory` — файл лёг в releases, а cd привёл в /srv/app",
-            "`hotfix.conf` — и cp, и cd поднялись в /srv/app",
-            "`hotfix.conf` — и cp, и cd поднялись в /srv/app/releases",
-            "`ls: cannot access 'hotfix.conf': No such file or directory` — файл лёг в /srv/app, а cd привёл в releases",
-          ],
-          answer: 0,
+          cwd: "/srv/app/current",
+          prompt:
+            "Ты в **/srv/app/current** (это ссылка на `releases/v2`). Положи хотфикс **/tmp/hotfix.conf** в **/srv/app** — рядом со ссылкой current, на уровень выше неё. Релизы не трогай.",
+          setup: async (w) => {
+            await appTree(w);
+            await w.write("/tmp/hotfix.conf", "workers = 16\n");
+          },
+          check: async ({ world }) => {
+            if (await world.exists("/srv/app/releases/hotfix.conf"))
+              return "Файл лёг в /srv/app/releases: для cp `..` — настоящий родитель v2, а не то, что «вверху» по $PWD. Убери его оттуда.";
+            return (await world.read("/srv/app/hotfix.conf")) === "workers = 16\n";
+          },
+          hint: "Для cp `..` из current — это родитель настоящего каталога v2. Куда это?",
+          solution: "cp /tmp/hotfix.conf /srv/app/",
+          accept: ["cd ..\ncp /tmp/hotfix.conf .", "cp /tmp/hotfix.conf ../.."],
+          reject: ["cp /tmp/hotfix.conf .."],
           explain:
-            "`cp` получает `..` и спрашивает ядро: для каталога `v2` это его настоящий родитель, `releases`. А `cd` — встроенная команда bash, в режиме `-L` она отрезает последний компонент от `$PWD` и попадает в `/srv/app`. Файл — в `/srv/app/releases/hotfix.conf`.",
+            "Внешние команды получают `..` от ядра: у каталога `v2` это `releases`. А `cd ..` — встроенная команда bash: в режиме `-L` она отрезает компонент от `$PWD` и приводит в `/srv/app`. Отсюда разница: `cp f ..` — в releases, `cd ..; cp f .` — в /srv/app. Надёжнее всего абсолютный путь.",
         },
         {
           id: "paths-4-02",
@@ -468,21 +480,26 @@ export const paths: Topic = {
           prompt:
             "В **/srv/drop** лежит отчёт **report.txt**: ls его показывает, а `cat /srv/drop/report.txt` отвечает `No such file or directory`. Почини: отчёт должен открываться по имени report.txt, содержимое — прежнее.",
           setup: async (w) => {
-            await w.write("/srv/drop/report.txt ", "Q3 revenue: 140\n");
+            await w.write("/srv/drop/report.txt ", REPORT);
             await w.write("/srv/drop/summary.txt", "ok\n");
           },
           check: async ({ world }) => {
             const good = await world.read("/srv/drop/report.txt");
             const bad = await world.exists("/srv/drop/report.txt ");
+            if ((await world.read("/srv/drop/summary.txt")) !== "ok\n") return "Пострадал соседний summary.txt — трогать нужно только отчёт. Начни заново.";
             if (good === null) return false;
-            if (!good.includes("Q3 revenue")) return "report.txt открывается, но это новый файл, а отчёт остался под старым именем.";
+            if (good !== REPORT) return "report.txt открывается, но это не исходный отчёт. Переименуй файл, а не пиши новый.";
             if (bad) return "Отчёт открывается, но рядом остался файл с кривым именем — переименуй, а не копируй.";
             return true;
           },
           hint: "Посмотри, как ls в терминале показывает это имя — кавычки там не просто так.",
           solution: "mv '/srv/drop/report.txt ' /srv/drop/report.txt",
           accept: ["mv /srv/drop/report.txt\\  /srv/drop/report.txt", "cd /srv/drop\nmv report.txt* report.txt"],
-          reject: ["touch /srv/drop/report.txt", "cp '/srv/drop/report.txt ' /srv/drop/report.txt"],
+          reject: [
+            "touch /srv/drop/report.txt",
+            "cp '/srv/drop/report.txt ' /srv/drop/report.txt",
+            "rm -f /srv/drop/*\necho 'Q3 revenue: 140' > /srv/drop/report.txt",
+          ],
           explain:
             "В терминале ls показал `'report.txt '` — в кавычках, потому что в конце имени пробел. В пайпе кавычек нет, и пробел не видно. Имя с пробелом передают в кавычках или экранируют `\\ `.",
         },
@@ -605,6 +622,9 @@ export const paths: Topic = {
           if (a === null) return false;
           const lines = a.split("\n").filter((s) => s.trim());
           if (lines.length !== 1 || /^total/.test(lines[0])) return "Это содержимое каталога, а нужна одна строка про сам каталог.";
+          const www = await world.info("/srv/www");
+          if (!www || (www.mode & 0o7777) !== 0o755 || www.uid !== world.user("bob")!.uid)
+            return "Права или владелец /srv/www изменились. Задача — только посмотреть, а не чинить. Начни заново.";
           const l = lines[0];
           if (/^l/.test(l)) return "Это строка самой ссылки: у ссылки всегда lrwxrwxrwx, её права ни на что не влияют.";
           if (/^d/.test(l) && l.split(/\s+/)[2] === "bob") return true;
@@ -613,7 +633,7 @@ export const paths: Topic = {
         hint: "Два ключа: один — показать сам каталог, второй — пройти по ссылке.",
         solution: "ls -ldL /var/www > /root/answer",
         accept: ["ls -ld /srv/www > /root/answer", "ls -ld /var/www/ > /root/answer"],
-        reject: ["ls -ld /var/www > /root/answer", "ls -l /var/www/ > /root/answer"],
+        reject: ["ls -ld /var/www > /root/answer", "ls -l /var/www/ > /root/answer", "chmod 777 /srv/www\nls -ldL /var/www > /root/answer"],
         explain:
           "`ls -ld /var/www` покажет ссылку (`lrwxrwxrwx`) — её права не проверяются. `-L` или слэш на конце проходят по ссылке, `-d` не даёт зайти внутрь. Владелец каталога — bob, а веб-сервер работает от своего пользователя.",
       },
