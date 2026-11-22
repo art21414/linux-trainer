@@ -631,6 +631,7 @@ export class Storage {
   async scan(): Promise<Map<number, { bytes: number; inodes: number }>> {
     const res = new Map<number, { bytes: number; inodes: number }>();
     for (const m of this.mounts) res.set(m.id, { bytes: 0, inodes: 0 });
+    const seen = new Set<number>(); // жёсткие ссылки занимают место и inode один раз
     for (const p of this.w.base.getAllPaths()) {
       let m = this.mountFor(p);
       if (p.startsWith("/proc/.held/")) {
@@ -648,6 +649,11 @@ export class Storage {
         continue;
       }
       const kind = st.isSymbolicLink ? "link" : st.isDirectory ? "dir" : "file";
+      if (kind === "file") {
+        const ino = this.w.inodes.ino(p);
+        if (seen.has(ino)) continue;
+        seen.add(ino);
+      }
       const r = res.get(m.id)!;
       r.bytes += this.allocOf(m.fstype, kind, st.size, this.virt.get(p));
       r.inodes += 1;
@@ -734,7 +740,11 @@ export class Storage {
     const a = args.map((x) => (typeof x === "string" ? normalize(x) : ""));
     const under = (p: string) => [...this.virt.keys()].filter((k) => k === p || k.startsWith(p + "/"));
     if (op === "rm") for (const k of under(a[0])) this.virt.delete(k);
-    else if (op === "writeFile") this.virt.delete(a[0]);
+    else if (op === "writeFile") for (const n of this.w.inodes.names(a[0])) this.virt.delete(n);
+    else if (op === "link") {
+      const v = this.virt.get(a[0]);
+      if (v) this.virt.set(a[1], v); // тот же объект: размер общий у всех имён inode
+    }
     else if (op === "mv") {
       for (const k of under(a[0])) {
         const v = this.virt.get(k)!;
