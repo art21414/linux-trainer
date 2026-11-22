@@ -804,3 +804,37 @@ describe("симлинки в путях, ~user, usrmerge", () => {
     expect((await s.run("readlink -f /bin/bash")).out).toBe("/usr/bin/bash\n");
   });
 });
+
+describe("cp/touch: края", () => {
+  it("cp f dir-несуществующий/ — Not a directory, ничего не создаётся", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && echo hi > f");
+    expect((await s.run("cp f /srv/nope/")).out).toBe("cp: cannot create regular file '/srv/nope/': Not a directory\n");
+    expect((await s.run("ls /srv | cat")).out).toBe("");
+  });
+
+  it("cp поверх существующего файла сохраняет mode, владельца, inode; -p берёт от источника", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && echo A > s && echo B > d && chmod 600 d && chown bob d");
+    const before = (await s.run("stat -c '%a %U %i' d")).out;
+    await s.run("cp s d");
+    expect((await s.run("stat -c '%a %U %i' d")).out).toBe(before);
+    expect((await s.run("cat d")).out).toBe("A\n");
+    await s.run("chmod 640 s && cp -p s d");
+    expect((await s.run("stat -c '%a %U' d")).out).toBe("640 root\n");
+  });
+
+  it("touch -rf без файла f: failed to get attributes", async () => {
+    const s = await sh();
+    await s.run("cd /tmp");
+    expect((await s.run("touch -rf")).out).toBe("touch: failed to get attributes of 'f': No such file or directory\n");
+  });
+
+  it("cp -rL через ссылку на каталог", async () => {
+    const s = await sh();
+    await s.run("mkdir -p /srv/app/releases/v2/conf && echo x > /srv/app/releases/v2/conf/c && ln -s releases/v2 /srv/app/current");
+    const r = await s.run("cp -rL /srv/app/current /tmp/dst");
+    expect(r.out).toBe("");
+    expect((await s.run("cat /tmp/dst/conf/c")).out).toBe("x\n");
+  });
+});

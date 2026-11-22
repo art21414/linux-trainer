@@ -588,7 +588,9 @@ export class World {
         const existed = await base.exists(n);
         await guardWriteOrCreate(n);
         if (existed) await w.ensureTimes(n);
+        const oldMode = existed ? (await base.stat(n)).mode : 0;
         await base.writeFile(n, c as never, o as never);
+        if (existed) await base.chmod(n, oldMode & 0o7777); // перезапись на месте сохраняет права (InMemoryFs сбрасывает в 0644)
         w.storage.virt.delete(n); // запись заменила содержимое: «виртуальный» размер больше не действует
         if (!existed) await onCreate(n, "file");
         else {
@@ -601,7 +603,9 @@ export class World {
         const existed = await base.exists(n);
         await guardWriteOrCreate(n);
         if (existed) await w.ensureTimes(n);
+        const oldMode = existed ? (await base.stat(n)).mode : 0;
         await base.appendFile(n, c as never, o as never);
+        if (existed) await base.chmod(n, oldMode & 0o7777); // перезапись на месте сохраняет права (InMemoryFs сбрасывает в 0644)
         if (!existed) await onCreate(n, "file");
         else {
           await w.stampChange(n);

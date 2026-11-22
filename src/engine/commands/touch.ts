@@ -17,7 +17,6 @@ export function touchCommand(w: World): Command {
     });
     if (p.bad) return fail(invalidOpt("touch", p.bad));
     const f = p.flags;
-    if (!p.rest.length) return fail(`touch: missing file operand\n${TRY}`);
 
     let setA = f.has("a");
     let setM = f.has("m");
@@ -56,6 +55,7 @@ export function touchCommand(w: World): Command {
       explicit = true;
     }
 
+    if (!p.rest.length) return fail(`touch: missing file operand\n${TRY}`);
     let err = "";
     let code = 0;
     const me = w.cur;

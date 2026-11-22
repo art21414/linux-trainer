@@ -449,19 +449,23 @@ export function cpCommand(w: World): Command {
         }
         if (verbose) out += `${q(srcShown)} -> ${q(destShown)}\n`;
         let names: string[] = [];
+        // ссылка на каталог (cp -L, -H): внутрь идём по физическому пути
+        const srcDir = realSrc;
+        if (dinf) destAbs = await w.resolveFinal(destAbs);
         try {
-          names = await w.fs.readdir(srcAbs);
+          names = await w.fs.readdir(srcDir);
         } catch (e) {
           bad(`cannot access ${q(srcShown)}: ${errnoText(e)}`);
         }
         for (const n of names) {
-          await copyEntry(srcAbs === "/" ? "/" + n : srcAbs + "/" + n, srcShown.replace(/\/+$/, "") + "/" + n, destAbs + "/" + n, destShown.replace(/\/+$/, "") + "/" + n, false);
+          await copyEntry(srcDir === "/" ? "/" + n : srcDir + "/" + n, srcShown.replace(/\/+$/, "") + "/" + n, destAbs + "/" + n, destShown.replace(/\/+$/, "") + "/" + n, false);
         }
         await applyAttrs(sinf, destAbs, destShown, created);
         return;
       }
 
       // --- не каталог ---
+      if (destShown.length > 1 && destShown.endsWith("/")) return bad(`cannot create regular file ${q(destShown)}: Not a directory`);
       if (dinf && dinf.isDir && !(dinf.isLink && !(await w.info(destAbs, true))?.isDir)) {
         return bad(`cannot overwrite directory ${q(destShown)} with non-directory`);
       }
