@@ -80,7 +80,26 @@ export interface BlockDev {
   /** Идентификатор таблицы разделов диска (для PARTUUID). */
   diskId?: string;
   partNo?: number;
+  /** Таблица разделов диска: dos (MBR) или gpt; у чистого диска нет. */
+  ptable?: "dos" | "gpt";
+  /** Диск с gpt: GUID диска. */
+  guid?: string;
+  /** Раздел: смещение начала, байт; id типа (dos: "83", "8e", "82", "fd"); загрузочный флаг; метка gpt. */
+  start?: number;
+  ptype?: string;
+  bootable?: boolean;
+  pname?: string;
+  /** Физический том LVM: к какой группе принадлежит (null — pvcreate сделан, группы нет). */
+  pv?: { vg: string | null };
   fs: FsInfo | null;
+}
+
+/** Группа томов LVM. LV — устройства type "lvm" с таким vg. */
+export interface VolGroup {
+  name: string;
+  /** Размер экстента, байт. */
+  pe: number;
+  uuid: string;
 }
 
 export interface Mount {
@@ -374,6 +393,8 @@ export class Storage {
   devs: BlockDev[] = [];
   mounts: Mount[] = [];
   virt = new Map<string, Virt>();
+  /** Группы томов LVM. */
+  vgs: VolGroup[] = [];
   /** Активные swap (имена устройств). */
   swaps = new Set<string>();
   memTotalKib = 3815640;
@@ -402,10 +423,11 @@ export class Storage {
       this.devs.push(dev);
       return dev;
     };
-    mk({ name: "vda", type: "disk", size: 20 * GiB, major: 252, minor: 0, diskId: "1c5ecd5f" });
-    const boot = mk({ name: "vda1", type: "part", parent: "vda", size: 1 * GiB, major: 252, minor: 1, diskId: "1c5ecd5f", partNo: 1, partuuid: "1c5ecd5f-01" });
+    mk({ name: "vda", type: "disk", size: 20 * GiB, major: 252, minor: 0, diskId: "1c5ecd5f", ptable: "dos" });
+    const boot = mk({ name: "vda1", type: "part", parent: "vda", size: 1 * GiB, major: 252, minor: 1, diskId: "1c5ecd5f", partNo: 1, partuuid: "1c5ecd5f-01", start: MiB, ptype: "83", bootable: true });
+    this.vgs.push({ name: VG, pe: 4 * MiB, uuid: "Zq3f1R-8bKd-0pXa-Ls7e-WmHc-2oUt-vN5yGi" });
     mk({
-      name: "vda2", type: "part", parent: "vda", size: 19 * GiB - MiB, major: 252, minor: 2, diskId: "1c5ecd5f", partNo: 2, partuuid: "1c5ecd5f-02",
+      name: "vda2", type: "part", parent: "vda", size: 19 * GiB - MiB, major: 252, minor: 2, diskId: "1c5ecd5f", partNo: 2, partuuid: "1c5ecd5f-02", start: GiB + MiB, ptype: "8e", pv: { vg: VG },
       fs: { ...newFs("LVM2_member", 19 * GiB, "kQ7mXe-3VbT-yH2d-NwUa-pR8c-ZsLf-J1o4Dg"), baseUsed: 0 },
     });
     const root = mk({ name: "rl-root", kname: "dm-0", type: "lvm", parent: "vda2", size: 17 * GiB - 4 * MiB, major: 253, minor: 0, dmName: "rl-root", vg: VG, lv: "root" });
@@ -507,7 +529,7 @@ export class Storage {
   async syncDev(): Promise<void> {
     const w = this.w;
     const base = w.base;
-    for (const dir of ["/dev/disk", `/dev/${VG}`, "/dev/mapper"]) if (await base.exists(dir)) await base.rm(dir, { recursive: true, force: true });
+    for (const dir of ["/dev/disk", `/dev/${VG}`, ...this.vgs.map((v) => `/dev/${v.name}`), "/dev/mapper"]) if (await base.exists(dir)) await base.rm(dir, { recursive: true, force: true });
     for (const p of base.getAllPaths()) if (/^\/dev\/(vd[a-z]+\d*|dm-\d+)$/.test(p)) await base.rm(p, { force: true });
     await w.mkdir("/dev", 0o755);
     const sym = async (target: string, path: string) => {
@@ -782,9 +804,43 @@ export class Storage {
     const used = kids.reduce((a, k) => a + k.size, 0) + MiB;
     if (used + sz > parent.size) throw new Error(`no space on ${disk}`);
     const no = kids.length ? Math.max(...kids.map((k) => k.partNo ?? 0)) + 1 : 1;
+    parent.ptable ??= "dos";
+    const start = kids.length ? Math.max(...kids.map((k) => (k.start ?? MiB) + k.size)) : MiB;
     const d: BlockDev = {
       name: `${disk}${no}`, kname: `${disk}${no}`, type: "part", parent: disk, size: sz, major: parent.major, minor: parent.minor + no,
-      diskId: parent.diskId, partNo: no, partuuid: `${parent.diskId}-${String(no).padStart(2, "0")}`, fs: null,
+      diskId: parent.diskId, partNo: no, partuuid: `${parent.diskId}-${String(no).padStart(2, "0")}`, fs: null, start, ptype: "83",
+    };
+    this.devs.push(d);
+    await this.syncDev();
+    await this.syncProc();
+    return d;
+  }
+
+  /** Свободные области диска (байты, [start, end)), выровнено по 1 MiB. */
+  freeRegions(disk: BlockDev): { start: number; end: number }[] {
+    const tail = disk.ptable === "gpt" ? 34 * 512 : 0;
+    const limit = Math.floor((disk.size - tail) / MiB) * MiB;
+    const kids = this.children(disk.name).filter((k) => k.start !== undefined).sort((a, b) => a.start! - b.start!);
+    const out: { start: number; end: number }[] = [];
+    let cur = MiB;
+    for (const k of kids) {
+      if (k.start! > cur) out.push({ start: cur, end: k.start! });
+      cur = Math.max(cur, k.start! + k.size);
+    }
+    if (limit > cur) out.push({ start: cur, end: limit });
+    return out;
+  }
+
+  /** Создать раздел в заданном месте (байты). Номер — первый свободный. */
+  async createPartition(disk: BlockDev, start: number, size: number, ptype = "83", name?: string): Promise<BlockDev> {
+    const used = new Set(this.children(disk.name).map((k) => k.partNo));
+    let no = 1;
+    while (used.has(no)) no++;
+    const d: BlockDev = {
+      name: `${disk.name}${no}`, kname: `${disk.name}${no}`, type: "part", parent: disk.name, size, major: disk.major, minor: disk.minor + no,
+      diskId: disk.diskId, partNo: no,
+      partuuid: disk.ptable === "gpt" ? this.newUuid() : `${disk.diskId}-${String(no).padStart(2, "0")}`,
+      fs: null, start, ptype, pname: name,
     };
     this.devs.push(d);
     await this.syncDev();
