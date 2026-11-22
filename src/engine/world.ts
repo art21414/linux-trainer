@@ -403,6 +403,22 @@ export class World {
     }
   }
 
+  /** Путь упирается в цикл симлинков (больше 40 переходов): ядро отвечает ELOOP. */
+  async isLoop(path: string): Promise<boolean> {
+    let cur = normalize(path);
+    for (let i = 0; i <= 40; i++) {
+      let t: string;
+      try {
+        if (!(await this.base.lstat(cur)).isSymbolicLink) return false;
+        t = await this.base.readlink(cur);
+      } catch {
+        return false;
+      }
+      cur = t.startsWith("/") ? normalize(t) : normalize(dirname(cur) + "/" + t);
+    }
+    return true;
+  }
+
   async exists(path: string): Promise<boolean> {
     return this.base.exists(normalize(path));
   }

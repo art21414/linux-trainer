@@ -440,7 +440,7 @@ export function lsCommand(w: World): Command {
       // битая ссылка в командной строке без -L листингуется как файл
       const inf = (await w.info(abs, true)) ?? (f.has("L") ? null : linf);
       if (!inf || !linf) {
-        err += `ls: cannot access '${t}': No such file or directory\n`;
+        err += `ls: cannot access '${t}': ${(await w.isLoop(abs)) ? "Too many levels of symbolic links" : "No such file or directory"}\n`;
         code = 2;
         continue;
       }
@@ -560,7 +560,7 @@ export function statCommand(w: World): Command {
       }
       const inf = await w.info(abs, p.flags.has("L"));
       if (!inf) {
-        err += `stat: cannot statx ${q1(t)}: No such file or directory\n`;
+        err += `stat: cannot statx ${q1(t)}: ${(await w.isLoop(abs)) ? "Too many levels of symbolic links" : "No such file or directory"}\n`;
         code = 1;
         continue;
       }
@@ -689,7 +689,7 @@ export function catCommand(w: World): Command {
         continue;
       }
       if (!inf) {
-        err += `cat: ${t}: No such file or directory\n`;
+        err += `cat: ${t}: ${(await w.isLoop(abs)) ? "Too many levels of symbolic links" : "No such file or directory"}\n`;
         code = 1;
         continue;
       }

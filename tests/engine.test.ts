@@ -838,3 +838,53 @@ describe("cp/touch: края", () => {
     expect((await s.run("cat /tmp/dst/conf/c")).out).toBe("x\n");
   });
 });
+
+describe("главы 04–06: inode, file, времена, alias", () => {
+  it("номера inode переиспользуются: rm + touch даёт тот же номер", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && touch a");
+    const n = (await s.run("stat -c %i a")).out;
+    await s.run("rm a && touch b");
+    expect((await s.run("stat -c %i b")).out).toBe(n);
+    await s.run("touch c");
+    expect((await s.run("stat -c %i c")).out).not.toBe(n);
+  });
+
+  it("размер каталога в stat растёт с записями (XFS short-form)", async () => {
+    const s = await sh();
+    await s.run("mkdir /tmp/e && cd /tmp/e");
+    expect((await s.run("stat -c %s .")).out).toBe("6\n");
+    await s.run("touch new");
+    expect((await s.run("stat -c %s .")).out).toBe("17\n");
+    expect((await s.run("ls -ld . | cat")).out).toMatch(/ 17 /);
+  });
+
+  it("file: текст, скрипт, CRLF, пустой, data, gzip, ссылка, ELF, mime", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && echo port > app.conf && printf 'a\\r\\nb\\r\\n' > site.conf && echo '#!/bin/bash' > run.sh && : > empty && printf '\\x00\\x01' > blob.bin && gzip -c app.conf > backup.txt && ln -s app.conf l");
+    expect((await s.run("file app.conf run.sh site.conf empty blob.bin")).out).toBe(
+      "app.conf:  ASCII text\nrun.sh:    Bourne-Again shell script, ASCII text executable\nsite.conf: ASCII text, with CRLF line terminators\nempty:     empty\nblob.bin:  data\n",
+    );
+    expect((await s.run("file backup.txt | cut -d, -f1")).out).toBe("backup.txt: gzip compressed data\n");
+    expect((await s.run("file /usr/bin/bash | cut -d, -f1-2")).out).toBe("/usr/bin/bash: ELF 64-bit LSB pie executable, x86-64\n");
+    expect((await s.run("file l /dev/null")).out).toBe("l:         symbolic link to app.conf\n/dev/null: character special (1/3)\n");
+    expect((await s.run("file -i app.conf")).out).toBe("app.conf: text/plain; charset=us-ascii\n");
+    expect((await s.run("file nope")).out).toBe("nope: cannot open `nope' (No such file or directory)\n");
+  });
+
+  it("ссылка на саму себя: Too many levels of symbolic links", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && ln -s app.conf /tmp/app.conf");
+    expect((await s.run("cat /tmp/app.conf")).out).toBe("cat: /tmp/app.conf: Too many levels of symbolic links\n");
+  });
+
+  it("alias переживает строки терминала", async () => {
+    const s = await sh();
+    await s.run("cd /tmp && touch zz");
+    await s.run("alias t=\"stat --printf='M %y\\n'\"");
+    expect((await s.run("t zz")).out).toMatch(/^M \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{9} \+0000\n$/);
+    expect((await s.run("alias")).out).toContain("alias t=");
+    await s.run("unalias t");
+    expect((await s.run("t zz")).out).toBe("bash: t: command not found\n");
+  });
+});

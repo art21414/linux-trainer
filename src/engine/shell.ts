@@ -13,12 +13,13 @@ import { touchCommand } from "./commands/touch";
 import { cpCommand, mkdirCommand, mvCommand, rmCommand } from "./commands/fileops";
 import { linkCommands } from "./commands/links";
 import { findCommand } from "./commands/find";
+import { fileCommand } from "./commands/file";
 import { lsofCommand } from "./commands/lsof";
 import { procCommands } from "./commands/procs";
 import { syncProc } from "./procfs";
 import { registerBaseServices } from "./commands/services";
 import { fixGlobs } from "./globs";
-import { fixCdP, fixTilde } from "./expand";
+import { aliasBuiltin, fixAliases, fixCdP, fixTilde } from "./expand";
 
 export type RunKind = "ok" | "error" | "notfound" | "unsupported" | "danger" | "sudo" | "clear" | "empty" | "su" | "exit";
 
@@ -129,6 +130,8 @@ export class Shell {
   private stack: Frame[] = [];
   /** set -o noclobber включён (переживает строки терминала). */
   private noclobber = false;
+  /** alias name='...' (переживают строки терминала, как в интерактивном bash). */
+  private aliases = new Map<string, string>();
   private names: string[];
 
   constructor(
@@ -155,6 +158,7 @@ export class Shell {
       ...userCommands(world),
       ...miscCommands(world, opts.onUnsupported ?? (() => {})),
       lsofCommand(world),
+      fileCommand(world),
       // ps/pgrep/pkill/pidof/kill/killall — на модели процессов (procs.ts); jobs/nice/top требуют отдельной интеграции с оболочкой
       ...procCommands(world, opts.onUnsupported ?? (() => {})).filter((c) => ["ps", "pgrep", "pkill", "pidof", "kill", "killall"].includes(c.name)),
       ...storageCommands(world, opts.onUnsupported ?? (() => {})),
@@ -231,6 +235,9 @@ export class Shell {
       return { out: out ? out + "\n" : "", code: 0, kind: "ok", cmd };
     }
 
+    const ab = aliasBuiltin(this.aliases, trimmed);
+    if (ab) return { out: ab.out, code: ab.code, kind: ab.code ? "error" : "ok", cmd };
+
     const w = this.world;
     w.tty = !/[|>]/.test(trimmed.replace(/'[^']*'|"[^"]*"/g, ""));
     w.pendingSu = null;
@@ -244,7 +251,7 @@ export class Shell {
       const prefix = this.noclobber ? "set -C\n" : "";
       await syncProc(w);
       w.activatePaths();
-      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, fixCdP(fixTilde(w, trimmed), this.cwd), this.env)), { cwd: this.cwd, env: this.env });
+      const r = await this.bash.exec(prefix + (await fixGlobs(w, this.cwd, fixCdP(fixTilde(w, fixAliases(this.aliases, trimmed)), this.cwd), this.env)), { cwd: this.cwd, env: this.env });
       if (clobberOn.length) this.noclobber = clobberOn[clobberOn.length - 1];
       stdout = r.stdout;
       stderr = r.stderr;
