@@ -31,6 +31,86 @@ const oneName = (a: string): string | null => {
   return n.length === 1 ? n[0] : null;
 };
 
+// ---------- «соседи целы» (content-standard §4) ----------
+// После setup запоминаем состояние деревьев keep; check сначала проверяет, что ничего из них не пострадало
+// (кроме except — того, что задание и должно менять). Для файлов — содержимое, mtime, права, владелец;
+// для каталогов и ссылок — тип, права, владелец (и цель ссылки). Новые файлы не мешают.
+// Разрушительные решения для reject (по одному на задание минимум) — в GUARDS.reject, дописываются в reject задания.
+interface Snap { kind: "f" | "d" | "l"; mode: number; uid: number; gid: number; content?: string; mtime?: number; target?: string }
+const snaps = new WeakMap<World, Map<string, Snap>>();
+async function snapOf(w: World, p: string): Promise<Snap | null> {
+  const i = await w.info(p);
+  if (!i) return null;
+  const s: Snap = { kind: i.isLink ? "l" : i.isDir ? "d" : "f", mode: i.mode & 0o7777, uid: i.uid, gid: i.gid };
+  if (s.kind === "f") {
+    s.content = await w.base.readFile(p).catch(() => ""); // без w.read: тот сдвигает atime
+    s.mtime = i.mtime.getTime();
+  }
+  if (s.kind === "l") s.target = await w.base.readlink(p).catch(() => "");
+  return s;
+}
+async function keep(w: World, roots: string[]): Promise<void> {
+  const m = new Map<string, Snap>();
+  for (const r of roots) for (const p of w.subtree(r)) {
+    const s = await snapOf(w, p);
+    if (s) m.set(p, s);
+  }
+  snaps.set(w, m);
+}
+async function damaged(w: World, except: string[] = []): Promise<string | null> {
+  for (const [p, s] of snaps.get(w) ?? []) {
+    if (except.some((e) => p === e || p.startsWith(e + "/"))) continue;
+    const now = await snapOf(w, p);
+    if (!now) return `Пропал ${p} — его трогать было нельзя. Начни заново.`;
+    if (now.kind !== s.kind) return `${p} подменён — его трогать было нельзя. Начни заново.`;
+    if (now.mode !== s.mode || now.uid !== s.uid || now.gid !== s.gid)
+      return `У ${p} изменились права или владелец — его трогать было нельзя. Начни заново.`;
+    if (now.content !== s.content || now.mtime !== s.mtime || now.target !== s.target)
+      return `Изменён ${p} — его трогать было нельзя. Начни заново.`;
+  }
+  return null;
+}
+interface Guard { keep: string[]; except?: string[]; reject?: string[] }
+/** Навесить «соседи целы» на задания темы. */
+function guarded(t: Topic, guards: Record<string, Guard>): Topic {
+  for (const set of [...t.sets, t.exam])
+    for (const e of set.exercises) {
+      const g = guards[e.id];
+      if (!g || e.type !== "terminal") continue;
+      const setup = e.setup;
+      const check = e.check;
+      e.setup = async (w) => {
+        if (setup) await setup(w);
+        await keep(w, g.keep);
+      };
+      e.check = async (c) => (await damaged(c.world, g.except)) ?? check(c);
+      if (g.reject) e.reject = [...(e.reject ?? []), ...g.reject];
+    }
+  return t;
+}
+
+const GUARDS: Record<string, Guard> = {
+  "paths-1-01": { keep: ["/srv/app"], except: ["/srv/app/releases/v2/conf/app.conf.v1"], reject: ["mv ../../v1/conf/app.conf app.conf.v1"] },
+  "paths-1-02": { keep: ["/srv/share"], reject: ["rm -f /srv/share/data.csv\necho bob > /root/answer"] },
+  "paths-1-03": { keep: ["/srv/app"], reject: ["rm /srv/app/.gitignore\necho .env > /root/answer"] },
+  "paths-2-01": { keep: ["/var/log/app"], reject: ["rm -f /var/log/app/worker.log\necho error.log > /root/answer"] },
+  "paths-2-02": { keep: ["/srv/app"], reject: ["rm -rf /srv/app/releases/v3\nreadlink -f /srv/app/current > /root/answer"] },
+  "paths-2-03": { keep: ["/etc/app"], reject: ["rm /etc/app/README\nls -d /etc/app/*/ > /root/answer"] },
+  "paths-2-04": { keep: ["/srv/projects"], reject: ["chown alice /srv/projects/notes.txt\necho 1005 > /root/answer"] },
+  "paths-2-05": { keep: ["/srv/app"], reject: ["chmod 777 /srv/app/releases/v2/app.jar\nls -l /srv/app/current/ > /root/answer"] },
+  "paths-2-06": { keep: ["/var/spool/app"], reject: ["rm /var/spool/app/queue/.lock\necho 5 > /root/answer"] },
+  "paths-3-01": { keep: ["/data/logs/app", "/var/log/app"], reject: ["rm /data/logs/app/gc.log\necho /data/logs/app/error.log > /root/answer"] },
+  "paths-3-02": { keep: ["/srv/reports"], reject: ["rm /srv/reports/feb.csv\necho jan.csv > /root/answer"] },
+  "paths-3-03": { keep: ["/srv/app"], reject: ["rm /srv/app/current\ncd /srv/app/releases/v2"] },
+  "paths-4-01": { keep: ["/srv/app"], except: ["/srv/app/hotfix.conf"], reject: ["rm -rf /srv/app/releases/v1\ncp /tmp/hotfix.conf /srv/app/"] },
+  "paths-4-03": { keep: ["/srv/drop"], except: ["/srv/drop/report.txt", "/srv/drop/report.txt "] },
+  "paths-exam-01": { keep: ["/var/log/nginx"], reject: ["rm /var/log/nginx/error.log.1\necho access.log.1 > /root/answer"] },
+  "paths-exam-02": { keep: ["/opt/tool"], reject: ["rm /opt/tool/current\necho /opt/tool/releases/2.4 > /root/answer"] },
+  "paths-exam-03": { keep: ["/srv/app"], reject: ["rm /srv/app/run.sh\necho .env > /root/answer"] },
+  "paths-exam-04": { keep: ["/srv/www", "/var/www"] },
+  "paths-exam-05": { keep: ["/var/log/app"], reject: ["chmod 777 /var/log/app/app.log\nls -tr /var/log/app > /root/answer"] },
+};
+
 /** /srv/app: два релиза, current -> releases/v2. */
 async function appTree(w: World) {
   for (const v of ["v1", "v2"]) {
@@ -42,7 +122,7 @@ async function appTree(w: World) {
   await w.fs.symlink("releases/v2", "/srv/app/current");
 }
 
-export const paths: Topic = {
+export const paths: Topic = guarded({
   id: "paths",
   n: 1,
   title: "Пути и ls",
@@ -675,4 +755,4 @@ export const paths: Topic = {
       },
     ],
   },
-};
+}, GUARDS);
