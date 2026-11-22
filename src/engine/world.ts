@@ -8,6 +8,8 @@ import { InodeTable } from "./inodes";
 import { ProcTable } from "./procs";
 import { Storage } from "./storage";
 import { OpenFiles } from "./openfiles";
+import { aclPerms, cloneAcl, extended } from "./acl";
+import type { Acl } from "./acl";
 import type { HoldOpts, HoldWho } from "./openfiles";
 
 export interface User {
@@ -117,6 +119,8 @@ export class World {
   unsupported: string[] = [];
   /** inode и жёсткие ссылки (см. inodes.ts). */
   readonly inodes = new InodeTable();
+  /** POSIX ACL по номеру inode (см. acl.ts). */
+  readonly acls = new Map<number, Acl>();
   /** atime/ctime/birth по номеру inode. У файлов из setup записи нет — тогда все времена равны mtime. */
   readonly times = new Map<number, Times>();
   /**
@@ -141,6 +145,7 @@ export class World {
 
   constructor() {
     this.fs = this.makeGuardedFs();
+    this.inodes.onFree = (ino) => void this.acls.delete(ino);
     this.activatePaths();
   }
 
@@ -535,8 +540,21 @@ export class World {
     }
   }
 
+  /** ACL файла (по inode) или undefined. */
+  aclOf(path: string): Acl | undefined {
+    return this.acls.size ? this.acls.get(this.inodes.ino(path)) : undefined;
+  }
+
+  /** Есть ли у пути ACL, видимый в `ls -l` (знак «+»). */
+  hasAcl(path: string): boolean {
+    const a = this.aclOf(path);
+    return !!a && (extended(a) || !!a.def);
+  }
+
   async setMode(path: string, mode: number): Promise<void> {
     path = await this.resolveFinal(path); // chmod всегда меняет цель симлинка, не саму ссылку
+    const acl = this.aclOf(path);
+    if (acl && extended(acl)) acl.mask = (mode >> 3) & 7; // chmod g=… при ACL меняет маску
     await this.ensureTimes(path);
     await this.base.chmod(normalize(path), mode);
     for (const n of this.inodes.names(path)) if (n !== normalize(path)) await this.base.chmod(n, mode);
@@ -567,7 +585,10 @@ export class World {
       return info.isDir || (info.mode & 0o111) !== 0;
     }
     let cls: number;
-    if (u.uid === info.uid) cls = (info.mode >> 6) & 7;
+    const acl = this.aclOf(info.path);
+    const ap = acl ? aclPerms(acl, info.mode, info.uid, info.gid, u.uid, this.gidsOf(u)) : null;
+    if (ap !== null) cls = ap;
+    else if (u.uid === info.uid) cls = (info.mode >> 6) & 7;
     else if (this.gidsOf(u).has(info.gid)) cls = (info.mode >> 3) & 7;
     else cls = info.mode & 7;
     return (cls & bit) !== 0;
@@ -649,8 +670,20 @@ export class World {
       const gid = setgid && di ? di.gid : w.cur.gid;
       w.owners.set(p, { uid: w.cur.uid, gid });
       w.inodes.create(p);
-      if (kind === "file") await base.chmod(p, 0o666 & ~w.umask);
-      if (kind === "dir") await base.chmod(p, (0o777 & ~w.umask) | (setgid ? 0o2000 : 0));
+      const pacl = di ? w.aclOf(dir) : undefined;
+      if ((kind === "file" || kind === "dir") && pacl?.def) {
+        // default ACL каталога: umask не применяется, права = запрошенные & default
+        const d = pacl.def;
+        const req = kind === "file" ? 0o666 : 0o777;
+        const ext = d.users.size > 0 || d.groups.size > 0;
+        const grp = ext ? d.mask & ((req >> 3) & 7) : d.group & ((req >> 3) & 7);
+        await base.chmod(p, ((d.user & ((req >> 6) & 7)) << 6) | (grp << 3) | (d.other & (req & 7)) | (kind === "dir" && setgid ? 0o2000 : 0));
+        const na: Acl = { users: new Map(d.users), groups: new Map(d.groups), mask: grp, groupObj: d.group, def: kind === "dir" ? { ...d, users: new Map(d.users), groups: new Map(d.groups) } : undefined };
+        if (extended(na) || na.def) w.acls.set(w.inodes.ino(p), na);
+      } else {
+        if (kind === "file") await base.chmod(p, 0o666 & ~w.umask);
+        if (kind === "dir") await base.chmod(p, (0o777 & ~w.umask) | (setgid ? 0o2000 : 0));
+      }
       w.stampCreate(p);
       await w.stampDirEntry(dir);
     };

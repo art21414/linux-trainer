@@ -8,6 +8,9 @@ export class InodeTable {
   private byIno = new Map<number, Set<string>>();
   /** Освобождённые номера: как в XFS, новый файл получает наименьший свободный (rm + touch дают прежний номер). */
   private freed: number[] = [];
+  /** Вызывается, когда у inode не осталось имён (World чистит ACL). */
+  onFree: ((ino: number) => void) | null = null;
+  private moving = false;
   private next = 50331777; // как на корневой xfs свежего сервера
 
   /** Выдать номер (если у пути его ещё нет). */
@@ -62,6 +65,7 @@ export class InodeTable {
     if (s && !s.size) {
       this.byIno.delete(n);
       this.freed.push(n);
+      if (!this.moving) this.onFree?.(n);
     }
   }
 
@@ -78,12 +82,14 @@ export class InodeTable {
     const t = normalize(to);
     const prefix = f + "/";
     this.forget(t);
+    this.moving = true; // inode переезжает вместе с именем: ACL не трогаем
     for (const [k, n] of [...this.byPath]) {
       if (k === f || k.startsWith(prefix)) {
         this.forget(k);
         this.attach(t + k.slice(f.length), n);
       }
     }
+    this.moving = false;
   }
 
   /** Все имена того же inode (включая само). */
