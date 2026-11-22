@@ -79,7 +79,7 @@ const GUARDS: Record<string, Guard> = {
   },
   "move-exam-01": { keep: ["/srv/inbox/keep"], reject: ["rm -rf /srv/inbox/*"] },
   "move-exam-02": { keep: ["/srv/app"], reject: ["rm -rf /srv/app/logs\nsystemctl restart logd"] },
-  "move-exam-03": { keep: ["/srv/dev-share"], except: ["/srv/dev-share"], reject: ["chmod 777 /srv/dev-share"] },
+  "move-exam-03": { keep: ["/srv/dev-share/alice-notes.txt", "/srv/dev-share/build.log"], reject: ["chmod 777 /srv/dev-share"] },
   "move-exam-04": {
     keep: ["/var/cache/app"],
     except: ["/var/cache/app/tmp1", "/var/cache/app/tmp2"],
@@ -151,7 +151,7 @@ export const moveDelete: Topic = guarded({
           accept: ["rmdir /srv/releases/v1 /srv/releases/v2", "rm -d /srv/releases/v1 /srv/releases/v2"],
           reject: ["ls /srv/releases"],
           explain:
-            "`ls` показал бы v2 пустым — в нём только скрытый `.keep`. `rmdir` (или `rm -d`) сам проверяет пустоту: v1 удалит, на v2 ответит `Directory not empty`. `rm -r` снёс бы v2 вместе с чужим файлом.",
+            "`ls` показал бы v2 пустым — в нём только скрытый `.keep`. `rmdir` (или `rm -d`) сам проверяет пустоту: v1 удалит, на v2 ответит `Directory not empty`. `rm -r` снёс бы v2 вместе с чужим файлом. Удобный приём — `rmdir /srv/releases/*`: удалятся только пустые, непустые v2 и v3 останутся.",
         },
         {
           id: "move-1-03",
@@ -323,12 +323,13 @@ export const moveDelete: Topic = guarded({
           check: async ({ world }) => {
             const pid = pidAtSetup.get(world)!;
             if (!world.procs.isAlive(pid)) return "Место освободилось, но myapp перезапущен или убит — а этого было нельзя. Начни заново.";
+            if (world.procs.stateOf(pid) === "T") return "myapp остановлен (SIGSTOP) и не работает. Продолжи его: kill -CONT.";
             return (await usedMiB(world, "/srv")) < 300;
           },
           hint: "Удалённый файл всё ещё доступен через дескриптор процесса в /proc. Его можно обрезать.",
           solution: ": > /proc/$(pidof myapp)/fd/3",
           accept: ["lsof +L1\n: > /proc/$(pidof myapp)/fd/3", "ls -l /proc/$(pidof myapp)/fd\n: > /proc/$(pidof myapp)/fd/3"],
-          reject: ["systemctl restart myapp", "kill $(pidof myapp)"],
+          reject: ["systemctl restart myapp", "kill $(pidof myapp)", "kill -STOP $(pidof myapp)\n: > /proc/$(pidof myapp)/fd/3"],
           explain:
             "`/proc/PID/fd/3` ведёт в тот самый удалённый файл, и `: >` обрезает его до нуля — ядро сразу освобождает блоки. Номер дескриптора видно в `lsof +L1` (колонка FD, `3w`) или в `ls -l /proc/PID/fd`. Правильное решение на будущее — переоткрытие логов (logrotate + reload).",
         },
@@ -502,7 +503,7 @@ export const moveDelete: Topic = guarded({
         prompt:
           "alice (в группе **dev**) не может удалить свой же файл в **/srv/dev-share**: `Permission denied`. Почини так, чтобы участники dev могли создавать и удалять файлы в этом каталоге, а остальные — нет.",
         setup: async (w) => {
-          const g = await groupWith(w, "dev", ["alice"]);
+          const g = await groupWith(w, "dev", ["alice", "bob"]);
           const a = w.user("alice")!;
           await w.mkdir("/srv/dev-share", 0o755, 0, g.gid);
           await w.write("/srv/dev-share/alice-notes.txt", "todo\n", 0o644, a.uid, a.gid);
@@ -510,14 +511,24 @@ export const moveDelete: Topic = guarded({
         },
         check: async ({ world }) => {
           const alice = world.user("alice")!;
+          const bob = world.user("bob")!;
           const nobody = world.user("nobody")!;
+          const d = (await world.info("/srv/dev-share"))!;
           if (await world.canModifyDir("/srv/dev-share", nobody)) return "Теперь удалять файлы в каталоге может кто угодно. Нужна только группа dev.";
-          return world.canModifyDir("/srv/dev-share", alice);
+          if (d.uid !== 0 || d.gid !== world.group("dev")!.gid)
+            return "Каталог сменил владельца или группу: доступ получила одна alice, а не группа dev (в ней ещё bob). Верни root:dev и дай права группе.";
+          if (!(await world.canModifyDir("/srv/dev-share", alice))) return false;
+          return (await world.canModifyDir("/srv/dev-share", bob)) || "alice может, а bob (тоже в dev) — нет.";
         },
         hint: "Удаление меняет каталог, а не файл. Чьи права на каталог нужно расширить?",
         solution: "chmod g+w /srv/dev-share",
         accept: ["chmod 775 /srv/dev-share", "chmod g=rwx /srv/dev-share"],
-        reject: ["chmod o+w /srv/dev-share", "chmod 666 /srv/dev-share/alice-notes.txt"],
+        reject: [
+          "chmod o+w /srv/dev-share",
+          "chmod 666 /srv/dev-share/alice-notes.txt",
+          "chown alice /srv/dev-share",
+          "chgrp alice /srv/dev-share\nchmod g+w /srv/dev-share",
+        ],
         explain:
           "`rm` вызывает `unlink()` — убирает запись из каталога, поэтому нужны `w` и `x` на каталог, а права на сам файл не важны. Группе dev — `g+w`; `777` открыл бы удаление всем.",
       },
