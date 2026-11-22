@@ -4,6 +4,7 @@ import type { Command } from "just-bash";
 import type { World } from "../world";
 import { resolve } from "../path";
 import { fail, parseArgs } from "../util";
+import { modeString } from "./files";
 
 /** Вычислить новый режим по спецификации chmod. null — неверная запись. */
 export function applyMode(spec: string, cur: number, isDir: boolean, umask: number): number | null {

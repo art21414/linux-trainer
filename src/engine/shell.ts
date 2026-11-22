@@ -70,6 +70,21 @@ export function fixParamErrors(line: string, stderr: string): string {
   return stderr;
 }
 
+/** setuid/setgid-утилиты как на Rocky 9 (passwd меняет /etc/shadow за обычного пользователя). Вызывается после создания Bash — он пишет свои заглушки в /usr/bin. */
+export async function applySpecialBits(w: World): Promise<void> {
+  const special: [string, number, number?][] = [
+    ["/usr/bin/passwd", 0o4755], ["/usr/bin/su", 0o4755], ["/usr/bin/sudo", 0o4111], ["/usr/bin/chage", 0o4755], ["/usr/bin/gpasswd", 0o4755],
+    ["/usr/bin/newgrp", 0o4755], ["/usr/bin/mount", 0o4755], ["/usr/bin/umount", 0o4755], ["/usr/sbin/unix_chkpwd", 0o4755], ["/usr/bin/write", 0o2755, 5],
+  ];
+  for (const [path, mode, gid] of special) {
+    if (!(await w.base.exists(path))) await w.write(path, "#!/bin/bash\n# Built-in command: " + path.replace(/^.*\//, "") + "\n", mode, 0, gid ?? 0);
+    else {
+      await w.base.chmod(path, mode);
+      if (gid) w.owners.set(path, { uid: 0, gid });
+    }
+  }
+}
+
 /** Сервер по умолчанию: Rocky Linux 9, пользователи root, alice (wheel), bob. */
 export async function createServer(): Promise<World> {
   const w = new World();
@@ -197,6 +212,7 @@ export class Shell {
       customCommands: custom,
       executionLimits: { maxLoopIterations: 5000, maxCommandCount: 5000, maxCallDepth: 50 },
     });
+    this.ready = applySpecialBits(world);
     world.current = user.name;
     world.shellPid = world.procs.login(user.name);
     this.names = [...new Set([...getCommandNames(), ...custom.map((c) => c.name), "cd", "export", "history", "exit", "type"])]
@@ -205,6 +221,7 @@ export class Shell {
   }
 
   private onNotFound: (name: string) => void;
+  private ready: Promise<void> = Promise.resolve();
 
   private loginEnv(u: User, cwd: string): Record<string, string> {
     return {
@@ -237,6 +254,7 @@ export class Shell {
   }
 
   async run(line: string): Promise<RunResult> {
+    await this.ready;
     const trimmed = line.trim();
     const cmd = (/^(?:sudo\s+)?(\S+)/.exec(trimmed)?.[1] ?? "").replace(/^.*\//, "");
     if (!trimmed) return { out: "", code: 0, kind: "empty", cmd };
