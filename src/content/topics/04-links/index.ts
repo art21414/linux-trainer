@@ -83,7 +83,7 @@ const GUARDS: Record<string, Guard> = {
   "links-exam-01": { keep: ["/srv/www"], reject: ["mv /srv/www/robots.txt /srv/share/robots.txt"] },
   "links-exam-02": { keep: ["/opt/tool/releases"], reject: ["rm -rf /opt/tool/releases/2.4\nln -sfn releases/2.5 /opt/tool/current"] },
   "links-exam-03": { keep: ["/usr/local/bin", "/opt/tools"], reject: ["find /usr/local/bin -xtype l -delete\necho > /root/answer"] },
-  "links-exam-04": { keep: ["/etc/nginx/sites-available"], reject: ["mv /etc/nginx/sites-available/shop.conf /etc/nginx/sites-enabled/shop.conf"] },
+  "links-exam-04": { keep: ["/srv/www", "/etc/nginx/conf.d"], reject: ["mv /srv/www/shop/nginx.conf /etc/nginx/conf.d/shop.conf"] },
   "links-exam-05": { keep: ["/srv/www/releases"], reject: ["rm -rf /var/www/current/"] },
 };
 
@@ -171,7 +171,7 @@ export const links: Topic = guarded(
             },
             hint: "Число жёстких ссылок хранится в inode: его показывают ls -l и stat.",
             solution: "stat -c %h /srv/data/db.dat > /root/answer",
-            accept: ["echo 3 > /root/answer"],
+            accept: ["ls -l /srv/data/db.dat | awk '{print $2}' > /root/answer"],
             reject: ["echo 1 > /root/answer"],
             explain:
               "Вторая колонка `ls -l` и `%h` в `stat` — число имён у inode. Данные освободятся, только когда удалят все три (и файл никто не держит открытым).",
@@ -483,7 +483,7 @@ export const links: Topic = guarded(
           type: "terminal",
           theory: "hard",
           prompt:
-            "Сделай **/srv/share/robots.txt** вторым именем файла **/srv/www/robots.txt** (тот же inode), чтобы правки в одном месте сразу были видны в другом.",
+            "Сделай **/srv/share/robots.txt** вторым именем файла **/srv/www/robots.txt**, чтобы правки в одном месте сразу были видны в другом.",
           setup: async (w) => {
             await w.write("/srv/www/robots.txt", "User-agent: *\nDisallow: /admin\n");
             await w.mkdir("/srv/share");
@@ -494,7 +494,7 @@ export const links: Topic = guarded(
             if (i.isLink) return "Это символическая ссылка, а нужен тот же inode.";
             return ino(world, "/srv/share/robots.txt") === ino(world, "/srv/www/robots.txt") || "Это копия — другой inode.";
           },
-          hint: "ln без ключей.",
+          hint: "Копия, даже cp -a, — уже другой файл. Нужно ещё одно имя этого.",
           solution: "ln /srv/www/robots.txt /srv/share/robots.txt",
           accept: ["cd /srv/share\nln /srv/www/robots.txt"],
           reject: ["cp -a /srv/www/robots.txt /srv/share/robots.txt"],
@@ -554,28 +554,29 @@ export const links: Topic = guarded(
           id: "links-exam-04",
           type: "terminal",
           theory: "symlink",
-          cwd: "/etc/nginx/sites-available",
+          cwd: "/srv/www/shop",
           prompt:
-            "Ты в **/etc/nginx/sites-available**. Включи сайт: создай в **/etc/nginx/sites-enabled** ссылку **shop.conf** на **sites-available/shop.conf**.",
+            "Ты в **/srv/www/shop**. nginx в RHEL подключает всё из `/etc/nginx/conf.d/*.conf`, а конфиг сайта живёт вместе с сайтом. Подключи его: создай ссылку **/etc/nginx/conf.d/shop.conf** на **/srv/www/shop/nginx.conf**.",
           setup: async (w) => {
-            await w.write("/etc/nginx/sites-available/shop.conf", "server { listen 80; server_name shop; }\n");
-            await w.write("/etc/nginx/sites-available/blog.conf", "server { listen 80; server_name blog; }\n");
-            await w.mkdir("/etc/nginx/sites-enabled");
+            await w.write("/srv/www/shop/nginx.conf", "server { listen 80; server_name shop; }\n");
+            await w.write("/srv/www/blog/nginx.conf", "server { listen 80; server_name blog; }\n");
+            await w.mkdir("/etc/nginx/conf.d");
+            await w.fs.symlink("/srv/www/blog/nginx.conf", "/etc/nginx/conf.d/blog.conf");
           },
           check: async ({ world }) => {
-            const p = "/etc/nginx/sites-enabled/shop.conf";
+            const p = "/etc/nginx/conf.d/shop.conf";
             if (!(await world.info(p))) return false;
-            if (!(await isLink(world, p))) return "Это копия, а не ссылка: правки в sites-available перестанут применяться.";
+            if (!(await isLink(world, p))) return "Это копия, а не ссылка: правки в /srv/www/shop/nginx.conf перестанут применяться.";
             const t = await target(world, p);
-            if (t === null) return `Ссылка битая: «${await rawLink(world, p)}» считается от /etc/nginx/sites-enabled.`;
-            return t === "/etc/nginx/sites-available/shop.conf" || "Ссылка ведёт не туда.";
+            if (t === null) return `Ссылка битая: «${await rawLink(world, p)}» считается от /etc/nginx/conf.d.`;
+            return t === "/srv/www/shop/nginx.conf" || "Ссылка ведёт не туда.";
           },
           hint: "Куда будет считаться относительный путь, записанный в ссылку?",
-          solution: "ln -s /etc/nginx/sites-available/shop.conf /etc/nginx/sites-enabled/shop.conf",
-          accept: ["ln -sr shop.conf ../sites-enabled/shop.conf", "ln -s ../sites-available/shop.conf /etc/nginx/sites-enabled/"],
-          reject: ["ln -s shop.conf ../sites-enabled/shop.conf"],
+          solution: "ln -s /srv/www/shop/nginx.conf /etc/nginx/conf.d/shop.conf",
+          accept: ["ln -sr nginx.conf /etc/nginx/conf.d/shop.conf", "ln -s ../../../srv/www/shop/nginx.conf /etc/nginx/conf.d/shop.conf"],
+          reject: ["ln -s nginx.conf /etc/nginx/conf.d/shop.conf", "cp nginx.conf /etc/nginx/conf.d/shop.conf"],
           explain:
-            "`ln -s shop.conf ../sites-enabled/shop.conf` записывает `shop.conf`, а ищется он рядом со ссылкой — то есть это ссылка на саму себя (ELOOP). Нужен абсолютный путь, `../sites-available/shop.conf` или `ln -sr`.",
+            "`ln -s nginx.conf /etc/nginx/conf.d/shop.conf` записывает в ссылку `nginx.conf`, а ищется он рядом со ссылкой — `/etc/nginx/conf.d/nginx.conf`, которого нет. Нужен абсолютный путь или `ln -sr`, который сам посчитает `../../../srv/www/shop/nginx.conf`.",
         },
         {
           id: "links-exam-05",
