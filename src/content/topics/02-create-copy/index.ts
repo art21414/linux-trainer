@@ -42,7 +42,101 @@ async function aliceSite(w: World, dir: string) {
 const APP_NEW = "listen = 8080\nworkers = 8\n";
 const APP_OLD = "listen = 8080\nworkers = 4\n";
 
-export const createCopy: Topic = {
+// ---------- «соседи целы» (content-standard §4) ----------
+// После setup запоминаем состояние деревьев keep; check сначала проверяет, что ничего из них не пострадало
+// (кроме except — того, что задание и должно менять). Для файлов — содержимое, mtime, права, владелец;
+// для каталогов и ссылок — тип, права, владелец (и цель ссылки). Новые файлы не мешают.
+// Разрушительные решения для reject (по одному на задание минимум) — в GUARDS.reject, дописываются в reject задания.
+interface Snap { kind: "f" | "d" | "l"; mode: number; uid: number; gid: number; content?: string; mtime?: number; target?: string }
+const snaps = new WeakMap<World, Map<string, Snap>>();
+async function snapOf(w: World, p: string): Promise<Snap | null> {
+  const i = await w.info(p);
+  if (!i) return null;
+  const s: Snap = { kind: i.isLink ? "l" : i.isDir ? "d" : "f", mode: i.mode & 0o7777, uid: i.uid, gid: i.gid };
+  if (s.kind === "f") {
+    s.content = await w.base.readFile(p).catch(() => ""); // без w.read: тот сдвигает atime
+    s.mtime = i.mtime.getTime();
+  }
+  if (s.kind === "l") s.target = await w.base.readlink(p).catch(() => "");
+  return s;
+}
+async function keep(w: World, roots: string[]): Promise<void> {
+  const m = new Map<string, Snap>();
+  for (const r of roots) for (const p of w.subtree(r)) {
+    const s = await snapOf(w, p);
+    if (s) m.set(p, s);
+  }
+  snaps.set(w, m);
+}
+async function damaged(w: World, except: string[] = []): Promise<string | null> {
+  for (const [p, s] of snaps.get(w) ?? []) {
+    if (except.some((e) => p === e || p.startsWith(e + "/"))) continue;
+    const now = await snapOf(w, p);
+    if (!now) return `Пропал ${p} — его трогать было нельзя. Начни заново.`;
+    if (now.kind !== s.kind) return `${p} подменён — его трогать было нельзя. Начни заново.`;
+    if (now.mode !== s.mode || now.uid !== s.uid || now.gid !== s.gid)
+      return `У ${p} изменились права или владелец — его трогать было нельзя. Начни заново.`;
+    if (now.content !== s.content || now.mtime !== s.mtime || now.target !== s.target)
+      return `Изменён ${p} — его трогать было нельзя. Начни заново.`;
+  }
+  return null;
+}
+interface Guard { keep: string[]; except?: string[]; reject?: string[] }
+/** Навесить «соседи целы» на задания темы. */
+function guarded(t: Topic, guards: Record<string, Guard>): Topic {
+  for (const set of [...t.sets, t.exam])
+    for (const e of set.exercises) {
+      const g = guards[e.id];
+      if (!g || e.type !== "terminal") continue;
+      const setup = e.setup;
+      const check = e.check;
+      e.setup = async (w) => {
+        if (setup) await setup(w);
+        await keep(w, g.keep);
+      };
+      e.check = async (c) => (await damaged(c.world, g.except)) ?? check(c);
+      if (g.reject) e.reject = [...(e.reject ?? []), ...g.reject];
+    }
+  return t;
+}
+
+const GUARDS: Record<string, Guard> = {
+  "copy-1-01": { keep: ["/opt"], reject: ["chmod 777 /opt\nmkdir -p /opt/billing/releases/2026-11/conf"] },
+  "copy-1-02": { keep: ["/srv/inbox"], reject: ["rm -f /srv/inbox/*\ntouch -- -lock"] },
+  "copy-1-03": { keep: ["/srv/scans", "/srv/legal"], reject: ['mv "contract 2026.pdf" /srv/legal/'] },
+  "copy-1-04": { keep: ["/var/log/app"], except: ["/var/log/app/debug.log"], reject: ["truncate -s 0 /var/log/app/*"] },
+  "copy-2-01": { keep: ["/srv/app"], reject: ["rm -rf /backup/app\nmv /srv/app /backup/app"] },
+  "copy-2-02": { keep: ["/etc/ssh"], reject: ["mv /etc/ssh/sshd_config /root/sshd_config.orig"] },
+  "copy-2-04": {
+    keep: ["/usr/share/app/defaults", "/etc/app"],
+    except: ["/etc/app/cache.conf", "/etc/app/log.conf"],
+    reject: ["mv /usr/share/app/defaults/cache.conf /usr/share/app/defaults/log.conf /etc/app/"],
+  },
+  "copy-2-05": { keep: ["/etc/app"], except: ["/etc/app/app.conf"], reject: ["chmod 777 /etc/app\ncp -b /tmp/app.conf /etc/app/app.conf"] },
+  "copy-2-06": { keep: ["/srv"], reject: ["chmod 777 /srv\nmkdir -p -m 700 /srv/secrets/vault"] },
+  "copy-3-01": {
+    keep: ["/etc/nginx"],
+    reject: [
+      "rm -rf /root/nginx.bak\nmv /etc/nginx /root/nginx.bak",
+      "rm -rf /root/nginx.bak/nginx\ncp -r /etc/nginx/. /root/nginx.bak/\nchmod 777 /root/nginx.bak/.htpasswd",
+    ],
+  },
+  "copy-3-02": {
+    keep: ["/home/alice/site"],
+    reject: [
+      "mv /home/alice/site/* /home/alice/site/.htaccess /var/www/html/",
+      "cp -a /home/alice/site/. /var/www/html/\nchmod 777 /var/www/html/.htaccess",
+    ],
+  },
+  "copy-3-03": { keep: ["/tmp/repo", "/etc/app"], except: ["/etc/app/a.conf", "/etc/app/c.conf"], reject: ["mv -u /tmp/repo/* /etc/app/"] },
+  "copy-exam-01": { keep: ["/etc/nginx"], reject: ["rm -rf /root/nginx.bak\nmv /etc/nginx /root/nginx.bak"] },
+  "copy-exam-02": { keep: ["/home/alice/site"], reject: ["mv /home/alice/site /root/site.orig"] },
+  "copy-exam-03": { keep: ["/var/log/worker"], except: ["/var/log/worker/worker.log"], reject: ["truncate -s 0 /var/log/worker/*"] },
+  "copy-exam-04": { keep: ["/srv/inbox"], reject: ["mv -- -config.yml /etc/app/config.yml"] },
+  "copy-exam-05": { keep: ["/srv"], reject: ["chmod 777 /srv\nmkdir -p -m 733 /srv/ftp/upload/incoming"] },
+};
+
+export const createCopy: Topic = guarded({
   id: "copy",
   n: 2,
   title: "Создание и копирование файлов",
@@ -106,7 +200,7 @@ export const createCopy: Topic = {
           },
           check: async ({ world }) => {
             if ((await world.exists("/srv/legal/contract")) || (await world.exists("/srv/legal/2026.pdf")))
-              return "В /srv/legal попали два чужих файла: contract и 2026.pdf. bash разрезал имя по пробелу. Начни заново.";
+              return "В /srv/legal попали чужие файлы (contract или 2026.pdf): либо bash разрезал имя по пробелу, либо шаблон захватил соседей. Начни заново.";
             return (await world.read("/srv/legal/contract 2026.pdf")) === "%PDF contract 2026\n";
           },
           hint: "Пробел для bash — граница между аргументами.",
@@ -125,6 +219,7 @@ export const createCopy: Topic = {
           setup: async (w) => {
             await w.write("/var/log/app/debug.log", "DEBUG cache miss key=user:42\n".repeat(4000));
             await w.write("/var/log/app/app.log", "INFO started\n");
+            await w.holdOpen("rsyslogd", "/var/log/app/debug.log");
             inoAtSetup.set(w, w.inodes.ino("/var/log/app/debug.log"));
           },
           check: async ({ world }) => {
@@ -331,7 +426,9 @@ export const createCopy: Topic = {
             const site = await world.read("/root/nginx.bak/conf.d/site.conf");
             if (main !== "worker_processes 4;\n" || site !== "server { listen 443 ssl; }\n")
               return "Вложенного каталога нет, но файлы бэкапа старые. Обнови содержимое /root/nginx.bak.";
-            if (!(await world.exists("/root/nginx.bak/.htpasswd"))) return "Нет .htpasswd: звёздочка не видит скрытые файлы.";
+            const hp = await world.info("/root/nginx.bak/.htpasswd");
+            if (!hp) return "Нет .htpasswd: звёздочка не видит скрытые файлы.";
+            if ((hp.mode & 0o7777) !== 0o640) return "У .htpasswd в бэкапе права не 640, как у оригинала, — пароли не должны быть видны всем.";
             return true;
           },
           hint: "Сначала посмотри, что лежит в /root/nginx.bak. Потом — копия содержимого, а не каталога.",
@@ -364,7 +461,9 @@ export const createCopy: Topic = {
             if (await world.exists("/var/www/html/site")) return "Сайт лёг в /var/www/html/site: цель существует, и cp положил каталог внутрь. Нужно содержимое.";
             const i = await world.info("/var/www/html/index.html");
             if (!i) return false;
-            if (!(await world.exists("/var/www/html/.htaccess"))) return "Нет .htaccess: * не видит скрытые файлы.";
+            const ht = await world.info("/var/www/html/.htaccess");
+            if (!ht) return "Нет .htaccess: * не видит скрытые файлы.";
+            if ((ht.mode & 0o7777) !== 0o644 || ht.uid !== alice.uid) return "У .htaccess не те права или владелец, что у оригинала (alice, 644).";
             if (!(await world.exists("/var/www/html/css/style.css"))) return "Не доехал css/ — копируй рекурсивно.";
             if (i.uid !== alice.uid) return "Файлы теперь принадлежат root: обычный cp делает владельцем того, кто копирует.";
             if ((i.mode & 0o7777) !== 0o640 || !sameSecond(i.mtime, OLD)) return "Владелец верный, но права или время изменились.";
@@ -541,6 +640,8 @@ export const createCopy: Topic = {
           "**/var/log/worker/worker.log** разросся, а worker держит его открытым. Сделай файл пустым так, чтобы worker продолжил писать в тот же файл.",
         setup: async (w) => {
           await w.write("/var/log/worker/worker.log", "job done id=1\n".repeat(5000));
+          await w.write("/var/log/worker/worker.err.log", "WARN retry id=7\n");
+          await w.holdOpen("rsyslogd", "/var/log/worker/worker.log");
           inoAtSetup.set(w, w.inodes.ino("/var/log/worker/worker.log"));
         },
         check: async ({ world }) => {
@@ -586,15 +687,15 @@ export const createCopy: Topic = {
             const m = await modeOf(world, p);
             if (m !== 0o755) return `У ${p} права ${m?.toString(8)}, а должны быть 755.`;
           }
-          if (inc !== 0o733) return `У incoming права ${inc.toString(8)}, нужны 733.`;
+          if (inc !== 0o733 && inc !== 0o1733) return `У incoming права ${inc.toString(8)}, нужны 733 (можно 1733 — со sticky).`;
           return true;
         },
         hint: "mkdir создаёт цепочку и задаёт права последнему каталогу одной командой.",
         solution: "mkdir -p -m 733 /srv/ftp/upload/incoming",
-        accept: ["mkdir -p /srv/ftp/upload/incoming\nchmod 733 /srv/ftp/upload/incoming"],
+        accept: ["mkdir -p /srv/ftp/upload/incoming\nchmod 733 /srv/ftp/upload/incoming", "mkdir -p -m 1733 /srv/ftp/upload/incoming"],
         reject: ["mkdir -p /srv/ftp/upload/incoming", "mkdir -p /srv/ftp/upload/incoming\nchmod -R 733 /srv/ftp"],
-        explain: "`-m` действует только на последний каталог цепочки; промежуточные получают права по umask (755). `-m` не зависит от umask: 733 получится ровно 733.",
+        explain: "`-m` действует только на последний каталог цепочки; промежуточные получают права по umask (755). `-m` не зависит от umask: 733 получится ровно 733. Со sticky-битом (1733) ещё лучше — загрузившие не смогут удалять чужие файлы; это тоже засчитывается.",
       },
     ],
   },
-};
+}, GUARDS);
