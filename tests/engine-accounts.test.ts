@@ -214,3 +214,38 @@ describe("sudo: sudoers, -l, -u, visudo", () => {
     expect(asked).toEqual(["[sudo] password for alice: "]);
   });
 });
+
+describe("права, особые биты, find, link", () => {
+  it("chmod -v/-c с символьной записью, --reference; chown снимает suid и у root", async () => {
+    const { s } = await sh();
+    await s.run("cd /tmp && touch g f && chmod 6755 g && chown bob g");
+    expect((await s.run("stat -c %a g")).out).toBe("755\n");
+    expect((await s.run("chmod -v 600 g")).out).toBe("mode of 'g' changed from 0755 (rwxr-xr-x) to 0600 (rw-------)\n");
+    expect((await s.run("chmod -v 600 g")).out).toBe("mode of 'g' retained as 0600 (rw-------)\n");
+    await s.run("chmod --reference=f g");
+    expect((await s.run("stat -c %a g")).out).toBe("644\n");
+    expect((await s.run("chgrp -v bob g")).out).toBe("changed group of 'g' from root to bob\n");
+  });
+
+  it("suid-утилиты как в Rocky: find -perm -4000 видит passwd", async () => {
+    const { s } = await sh();
+    expect(strip((await s.run("ls -l /usr/bin/passwd | cat")).out)).toContain("-rwsr-xr-x.");
+    expect((await s.run("find /usr/bin -perm -4000 -name passwd")).out).toBe("/usr/bin/passwd\n");
+  });
+
+  it("find -samefile X -delete удаляет все имена; find -L -type l видит битые", async () => {
+    const { s } = await sh();
+    await s.run("mkdir /tmp/d && cd /tmp/d && touch f && ln f f2 && ln -s f ok && ln -s nope bad");
+    expect((await s.run("find -L . -type l")).out).toBe("./bad\n");
+    await s.run("find . -samefile f -delete");
+    expect((await s.run("ls -A | cat")).out).toBe("bad\nok\n");
+  });
+
+  it("link A B", async () => {
+    const { s } = await sh();
+    await s.run("cd /tmp && echo x > a && link a b");
+    expect((await s.run("stat -c %h a")).out).toBe("2\n");
+    expect((await s.run("link a b")).out).toBe("link: cannot create link 'b' to 'a': File exists\n");
+    expect((await s.run("link a")).out).toContain("link: missing operand after ‘a’");
+  });
+});

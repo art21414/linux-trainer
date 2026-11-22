@@ -411,7 +411,7 @@ export const links: Topic = guarded(
             },
             hint: "Найди имена по номеру inode — и удали найденное тем же find.",
             solution: "find /srv -xdev -inum $(stat -c %i /srv/data/db.dump) -delete",
-            accept: ["rm /srv/data/db.dump /srv/old/db.dump.1 /srv/tmp/.restore.tmp", "find /srv -samefile /srv/data/db.dump -delete"],
+            accept: ["rm /srv/data/db.dump /srv/old/db.dump.1 /srv/tmp/.restore.tmp", "find /srv -xdev -samefile /srv/data/db.dump\nrm /srv/data/db.dump /srv/old/db.dump.1 /srv/tmp/.restore.tmp"],
             reject: ["rm /srv/data/db.dump /srv/old/db.dump.1"],
             explain:
               "Данные освобождаются, когда у inode не осталось имён. По имени их не найти — третье называется `.restore.tmp`. `find -inum … -delete` удаляет ровно имена этого inode, а копию с тем же именем не трогает.",

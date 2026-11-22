@@ -3,7 +3,7 @@ import { defineCommand } from "just-bash";
 import type { Command } from "just-bash";
 import type { World } from "../world";
 import { basename, dirname, normalize, resolve } from "../path";
-import { fail, parseArgs } from "../util";
+import { fail, parseArgs, shq } from "../util";
 
 const tryHelp = (cmd: string) => `Try '${cmd} --help' for more information.`;
 
@@ -282,6 +282,18 @@ export function realpathCommand(w: World): Command {
   });
 }
 
+export function linkCommand(w: World): Command {
+  void w;
+  return defineCommand("link", async (args, ctx) => {
+    if (args.length < 2) return fail(`link: missing operand${args.length === 1 ? ` after ‘${args[0]}’` : ""}\n${tryHelp("link")}`, 1);
+    if (args.length > 2) return fail(`link: extra operand ‘${args[2]}’\n${tryHelp("link")}`, 1);
+    const r = await ctx.exec!(`ln -- ${shq(args[0])} ${shq(args[1])}`, { cwd: ctx.cwd });
+    // ln: failed to create hard link 'B' => 'A': X  →  link: cannot create link 'B' to 'A': X
+    const err = r.stderr.replace(/^ln: failed to create hard link '(.*)' => '(.*)': /, "link: cannot create link '$1' to '$2': ").replace(/^ln: failed to create hard link '(.*)': /, `link: cannot create link '$1' to '${args[0]}': `).replace(/^ln: /, "link: ");
+    return { stdout: r.stdout, stderr: err, exitCode: r.exitCode };
+  });
+}
+
 export function unlinkCommand(w: World): Command {
   return defineCommand("unlink", async (args, ctx) => {
     const p = parseArgs(args, { short: "" });
@@ -304,5 +316,5 @@ export function unlinkCommand(w: World): Command {
 }
 
 export function linkCommands(w: World): Command[] {
-  return [lnCommand(w), readlinkCommand(w), realpathCommand(w), unlinkCommand(w)];
+  return [lnCommand(w), linkCommand(w), readlinkCommand(w), realpathCommand(w), unlinkCommand(w)];
 }

@@ -118,10 +118,14 @@ export class TerminalView {
       this.promptEl.textContent = question;
       this.el.classList.remove("busy");
       this.input.value = "";
+      // пароль (Password:, New password:, [sudo] password for X:) не показываем — как настоящий терминал
+      const secret = /password[^:]*:\s*$/i.test(question);
+      if (secret) this.input.type = "password";
       this.focus();
       this.asking = (answer) => {
         this.asking = null;
-        this.out.append(h("div", { class: "line" }, h("span", { class: "pr" }, question), h("span", { class: "cmd" }, answer ?? "^C")));
+        this.input.type = "text";
+        this.out.append(h("div", { class: "line" }, h("span", { class: "pr" }, question), h("span", { class: "cmd" }, secret ? "" : (answer ?? "^C"))));
         this.scrollDown();
         this.el.classList.add("busy");
         this.input.value = "";

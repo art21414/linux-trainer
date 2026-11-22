@@ -18,6 +18,7 @@ type Node =
   | { t: "not"; a: Node }
   | { t: "test"; name: string; arg?: string; extra?: string[] };
 
+const samefileCache = new WeakMap<object, Map<string, number>>();
 const ACTIONS = new Set(["-print", "-print0", "-printf", "-ls", "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fls", "-fprintf"]);
 const WITH_ARG = new Set([
   "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-lname", "-ilname", "-regex", "-iregex", "-type", "-xtype", "-inum", "-links", "-size",
@@ -319,9 +320,17 @@ async function runFind(
       case "-inum": return cmpNum(arg, w.inodes.ino(inf.path), n.name);
       case "-links": return cmpNum(arg, await linkCount(w, inf), n.name);
       case "-samefile": {
-        const ref = await w.info(resolve(ctx.cwd, arg), follow);
-        if (!ref) throw new FindError(`${q(arg)}: No such file or directory`);
-        return w.inodes.sameFile(ref.path, inf.path);
+        // эталон вычисляется один раз (как dev+ino при разборе выражения): после -delete имён оригинала сравнение не ломается
+        let cache = samefileCache.get(ctx);
+        if (!cache) samefileCache.set(ctx, (cache = new Map()));
+        let ino = cache.get(arg);
+        if (ino === undefined) {
+          const ref = await w.info(resolve(ctx.cwd, arg), follow);
+          if (!ref) throw new FindError(`${q(arg)}: No such file or directory`);
+          ino = w.inodes.ino(ref.path);
+          cache.set(arg, ino);
+        }
+        return w.inodes.ino(inf.path) === ino;
       }
       case "-empty": return inf.isDir ? (await w.base.readdir(e.abs)).length === 0 : !inf.isLink && inf.size === 0;
       case "-size": {
@@ -467,7 +476,7 @@ async function runFind(
       for (const nm of names) {
         if (quit) return;
         const cabs = e.abs === "/" ? "/" + nm : `${e.abs}/${nm}`;
-        const ci = await w.info(cabs, follow);
+        const ci = (await w.info(cabs, follow)) ?? (follow ? await w.info(cabs) : null); // -L: битая ссылка остаётся ссылкой
         if (!ci) continue;
         await visit({ path: joinPath(e.path, nm), abs: cabs, depth: e.depth + 1, inf: ci, name: nm, start: e.start }, startMountId);
       }
@@ -488,7 +497,7 @@ async function runFind(
 
   for (const s of starts) {
     const abs = resolve(ctx.cwd, s);
-    const inf = await w.info(abs, follow);
+    const inf = (await w.info(abs, follow)) ?? (follow ? await w.info(abs) : null);
     if (!inf || !(await w.canTraverse(abs))) {
       emitErr(`find: ${q(s)}: ${inf ? "Permission denied" : "No such file or directory"}\n`);
       exit = 1;
