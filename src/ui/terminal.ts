@@ -30,6 +30,7 @@ export class TerminalView {
   readonly el: HTMLElement;
   private out: HTMLElement;
   private input: HTMLInputElement;
+  private keys: HTMLElement;
   private promptEl: HTMLElement;
   private title: HTMLElement;
   private histIdx = 0;
@@ -38,7 +39,7 @@ export class TerminalView {
   private ro?: ResizeObserver;
   /** Команда задала вопрос (`rm -i`): ждём ответ в строке ввода. */
   private asking: ((answer: string | null) => void) | null = null;
-  onResult?: (r: RunResult, line: string) => void;
+  onResult?: (r: RunResult, line: string) => void | Promise<void>;
   /** Пользователь печатает (для реакций Палыча). */
   onTyping?: () => void;
 
@@ -64,7 +65,7 @@ export class TerminalView {
       { class: "term-head" },
       this.title,
     );
-    const keys = h("div", { class: "keys" });
+    this.keys = h("div", { class: "keys" });
     for (const k of KEYS) {
       const b = h("button", { type: "button", class: k.length > 1 && k !== "^C" ? "wide" : "" }, k === "Tab" ? "TAB ⇥" : k);
       // pointerdown + preventDefault: фокус остаётся в поле, клавиатура не прячется
@@ -72,13 +73,14 @@ export class TerminalView {
         e.preventDefault();
         void this.key(k);
       });
-      keys.append(b);
+      this.keys.append(b);
     }
-    this.el = h("div", { class: "term" }, head, this.out, form, keys);
+    this.el = h("div", { class: "term" }, head, this.out, form, this.keys);
     this.out.addEventListener("click", () => {
       if (!window.getSelection()?.toString()) this.focus(false);
     });
     this.input.addEventListener("keydown", (e) => {
+      if (this.input.disabled) return;
       if (e.key === "Tab") {
         e.preventDefault();
         void this.key("Tab");
@@ -163,6 +165,13 @@ export class TerminalView {
     this.input.focus({ preventScroll: true });
   }
 
+  /** После зачёта вывод остаётся доступен для чтения. */
+  lockInput(): void {
+    this.input.disabled = true;
+    this.input.value = "";
+    this.keys.inert = true;
+  }
+
   private updatePrompt(): void {
     this.promptEl.textContent = this.shell.prompt();
     const u = this.shell.user;
@@ -183,11 +192,13 @@ export class TerminalView {
 
   /** Выполнить строку так, будто её ввели руками. */
   async run(line: string): Promise<void> {
+    if (this.input.disabled) return;
     this.input.value = line;
     await this.submit();
   }
 
   private async submit(): Promise<void> {
+    if (this.input.disabled) return;
     if (this.asking) {
       this.asking(this.input.value);
       return;
@@ -203,25 +214,29 @@ export class TerminalView {
     }
     this.busy = true;
     this.el.classList.add("busy");
-    let r: RunResult;
     try {
-      r = await this.shell.run(line);
-    } catch (e) {
-      r = { out: `тренажёр: внутренняя ошибка: ${e instanceof Error ? e.message : e}\n`, code: 1, kind: "error", cmd: "" };
+      let r: RunResult;
+      try {
+        r = await this.shell.run(line);
+      } catch (e) {
+        r = { out: `тренажёр: внутренняя ошибка: ${e instanceof Error ? e.message : e}\n`, code: 1, kind: "error", cmd: "" };
+      }
+      if (/\x1b\[2J|\x1bc/.test(r.out) || r.kind === "clear") this.out.innerHTML = "";
+      else if (r.out) this.print(r.out.replace(/\n$/, ""));
+      this.histIdx = this.shell.history.length;
+      this.draft = "";
+      this.updatePrompt();
+      this.scrollDown();
+      await this.onResult?.(r, line);
+    } finally {
+      this.busy = false;
+      this.el.classList.remove("busy");
     }
-    this.busy = false;
-    this.el.classList.remove("busy");
-    if (/\x1b\[2J|\x1bc/.test(r.out) || r.kind === "clear") this.out.innerHTML = "";
-    else if (r.out) this.print(r.out.replace(/\n$/, ""));
-    this.histIdx = this.shell.history.length;
-    this.draft = "";
-    this.updatePrompt();
-    this.scrollDown();
-    this.onResult?.(r, line);
   }
 
   private async key(k: string): Promise<void> {
     const inp = this.input;
+    if (inp.disabled) return;
     const hist = this.shell.history;
     if (this.asking) {
       // отвечаем на вопрос команды: Tab и история не нужны, ^C — «нет»
@@ -238,6 +253,7 @@ export class TerminalView {
       const head = inp.value.slice(0, pos);
       const tail = inp.value.slice(pos);
       const res = await this.shell.complete(head);
+      if (inp.disabled) return;
       if (res.options.length) {
         this.out.append(h("div", { class: "line" }, h("span", { class: "pr" }, this.shell.prompt()), h("span", { class: "cmd" }, inp.value)));
         this.print(res.options.join("  "));

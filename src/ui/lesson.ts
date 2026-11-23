@@ -154,7 +154,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
   const sheetBtn = h("button", { class: "btn" }, "Продолжить");
   const sheet = h(
     "div",
-    { class: "sheet" },
+    { class: "sheet", inert: "" },
     h("div", { class: "sheet-head" }, sheetIco, h("div", { class: "sheet-titles" }, sheetCode, sheetTitle), sheetMascot.el),
     sheetBody,
     sheetBtn,
@@ -169,6 +169,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
   };
 
   const showSheet = (ok: boolean, title: string, html: string) => {
+    sheet.inert = false;
     sheet.className = `sheet show ${ok ? "ok" : "bad"}`;
     sheetIco.replaceChildren(icon(ok ? "check" : "cross", { size: 20 }));
     sheetCode.textContent = ok ? "OK exit 0" : "FAIL exit 1";
@@ -200,6 +201,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
   };
 
   const finish = () => {
+    if (solved !== total) return;
     const accuracy = total ? Math.max(0, (total - failed.size) / total) : 1;
     const weak: LessonOutcome["weak"] = [];
     for (const i of failed) {
@@ -226,10 +228,13 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
 
   const next = () => {
     view?.destroy?.();
+    view = null;
     termCleanup?.();
     termCleanup = null;
     live = null;
+    sheet.inert = true;
     sheet.className = "sheet";
+    footerRow.replaceChildren();
     if (!queue.length) return finish();
     const idx = queue.shift()!;
     const item = spec.items[idx];
@@ -257,7 +262,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     checkBtn.className = "btn";
     checkBtn.disabled = !view.ready();
     checkBtn.onclick = () => {
-      if (!view || !view.ready()) return;
+      if (!sheet.inert || checkBtn.disabled || !view?.ready()) return;
       const r = view.check();
       checkBtn.disabled = true;
       if (r.ok) {
@@ -279,6 +284,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     body.className = "ex term-ex";
     const w = await createServer();
     if (ex.setup) await ex.setup(w);
+    if (!screen.isConnected) return;
     const shell = new Shell(w, {
       user: ex.user ?? "root",
       cwd: ex.cwd,
@@ -304,6 +310,7 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
     let done = false;
     const hintBtn = h("button", { class: "btn ghost small" }, icon("hint", { size: 18 }), " Подсказка");
     hintBtn.onclick = () => {
+      if (done) return;
       hintLevel++;
       hintBox.style.display = "";
       if (hintLevel === 1) {
@@ -324,8 +331,11 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
       mascot.activity();
       reactToCommand(mascot, r, shell.user.name);
       const res = await ex.check({ world: w, shell });
+      if (done) return;
       if (res === true) {
         done = true;
+        term.lockInput();
+        hintBtn.disabled = true;
         onSolved(item, idx);
         updateBar();
         play("right");
@@ -341,13 +351,16 @@ export function renderLesson(root: HTMLElement, spec: LessonSpec, onDone: (o: Le
       }
     };
     termCleanup = () => {
+      done = true;
       term.destroy();
       mascot.destroy();
     };
     setTimeout(() => term.focus(), 350);
   };
 
-  sheetBtn.onclick = () => next();
+  sheetBtn.onclick = () => {
+    if (!sheet.inert) next();
+  };
   updateBar();
   next();
 
