@@ -1,5 +1,6 @@
 import type { Topic } from "../../types";
 import type { World } from "../../../engine/world";
+import { resolve } from "../../../engine/path";
 import { guarded, type Guard } from "../../guard";
 import theoryMd from "./theory.md?raw";
 
@@ -11,6 +12,7 @@ const stamp = (w: World, path: string, mtimeMin: number, atimeMin = mtimeMin) =>
   w.setTimes(path, { mtime: ago(mtimeMin), atime: ago(atimeMin) });
 const bytes = (n: number) => "x".repeat(n - 1) + "\n";
 const REPORT = "Q3 revenue: 140\nQ3 costs: 95\nmargin: 32%\n";
+const releaseConfig = (v: "v1" | "v2") => `# release ${v}\nlisten = 8080\nworkers = ${v === "v1" ? 4 : 8}\n`;
 
 /** Содержимое /root/answer без краевых пробелов; null — файла нет. */
 async function answer(w: World): Promise<string | null> {
@@ -31,6 +33,28 @@ const oneName = (a: string): string | null => {
   const n = namesOf(a);
   return n.length === 1 ? n[0] : null;
 };
+
+/** Имя владельца или полный вывод одной команды о самом каталоге. */
+function shareOwnerAnswer(a: string, cwd: string): boolean {
+  if (a === "bob") return true;
+  const isShare = (name: string) => resolve(cwd, name.replace(/^(['"])(.*)\1$/, "$2")) === "/srv/share";
+  const lines = a.split("\n");
+  if (lines.length === 1) {
+    const listing = a.match(/^d[rwxstST-]{9}[.+]?[ \t]+\d+[ \t]+bob[ \t]+(?:\S+[ \t]+)?[\d.]+[KMGTP]?[ \t]+[^\n]+[ \t]+(\S+)$/);
+    return listing !== null && isShare(listing[1]);
+  }
+
+  const [file, size, device, access, ...times] = lines.map((line) => line.trim());
+  if (/^Context: \S+$/.test(times[0] ?? "")) times.shift();
+  const labels = ["Access", "Modify", "Change", "Birth"];
+  const date = /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? [+-]\d{4}|-)$/;
+  return file.startsWith("File: ") && isShare(file.slice("File: ".length))
+    && /^Size: \d+\s+Blocks: \d+\s+IO Block: \d+\s+directory$/.test(size)
+    && /^Device: \S+\s+Inode: \d+\s+Links: \d+$/.test(device)
+    && /^Access: \([0-7]{4}\/d[rwxstST-]{9}\)\s+Uid: \(\s*\d+\/\s*bob\)\s+Gid: \(\s*\d+\/\s*\S+\)$/.test(access)
+    && times.length === labels.length
+    && times.every((line, i) => line.startsWith(`${labels[i]}: `) && date.test(line.slice(labels[i].length + 2)));
+}
 
 const GUARDS: Record<string, Guard> = {
   "paths-1-01": { keep: ["/srv/app"], except: ["/srv/app/releases/v2/conf/app.conf.v1"], reject: ["mv ../../v1/conf/app.conf app.conf.v1"] },
@@ -56,10 +80,10 @@ const GUARDS: Record<string, Guard> = {
 
 /** /srv/app: два релиза, current -> releases/v2. */
 async function appTree(w: World) {
-  for (const v of ["v1", "v2"]) {
+  for (const v of ["v1", "v2"] as const) {
     await w.mkdir(`/srv/app/releases/${v}/conf`);
     await w.mkdir(`/srv/app/releases/${v}/bin`);
-    await w.write(`/srv/app/releases/${v}/conf/app.conf`, `# release ${v}\nlisten = 8080\nworkers = ${v === "v1" ? 4 : 8}\n`);
+    await w.write(`/srv/app/releases/${v}/conf/app.conf`, releaseConfig(v));
   }
   await w.write("/srv/app/releases/v2/app.jar", bytes(4096));
   await w.fs.symlink("releases/v2", "/srv/app/current");
@@ -86,10 +110,14 @@ export const paths: Topic = guarded({
             "Ты в каталоге конфигов нового релиза **/srv/app/releases/v2/conf**. Для сравнения нужен конфиг прошлого релиза: скопируй **app.conf** из **/srv/app/releases/v1/conf** сюда, под именем **app.conf.v1**.",
           setup: appTree,
           check: async ({ world }) => {
-            const got = await world.read("/srv/app/releases/v2/conf/app.conf.v1");
+            const source = "/srv/app/releases/v1/conf/app.conf";
+            const copy = "/srv/app/releases/v2/conf/app.conf.v1";
+            if (!(await world.info(copy))?.isFile) return false;
+            if (world.inodes.sameFile(source, copy)) return "Это жёсткая ссылка. Нужна отдельная копия.";
+            const got = await world.read(copy);
             if (got === null) return false;
-            if (got.includes("release v2")) return "Это конфиг текущего релиза v2, а нужен из v1.";
-            return got.includes("release v1");
+            if (got === releaseConfig("v2")) return "Это конфиг текущего релиза v2, а нужен из v1.";
+            return got === releaseConfig("v1");
           },
           hint: "От conf до releases — два уровня вверх.",
           solution: "cp ../../v1/conf/app.conf app.conf.v1",
@@ -97,7 +125,11 @@ export const paths: Topic = guarded({
             "cp /srv/app/releases/v1/conf/app.conf ./app.conf.v1",
             "cd ../../v1/conf\ncp app.conf ~-/app.conf.v1",
           ],
-          reject: ["cp app.conf app.conf.v1"],
+          reject: [
+            "cp app.conf app.conf.v1",
+            "echo 'release v1' > app.conf.v1",
+            "ln ../../v1/conf/app.conf app.conf.v1",
+          ],
           explain:
             "`..` — настоящая запись каталога, поэтому работает в любой команде: `../../v1` из `v2/conf` — это `releases/v1`. Второй вариант — через `~-`: после `cd` туда, откуда пришёл, ведёт `$OLDPWD`.",
         },
@@ -114,13 +146,11 @@ export const paths: Topic = guarded({
             await w.write("/srv/share/report.txt", "Q3\n", 0o644, a.uid, a.gid);
             await w.write("/srv/share/data.csv", "id,sum\n1,10\n", 0o644, a.uid, a.gid);
           },
-          check: async ({ world }) => {
+          check: async ({ world, shell }) => {
             const a = await answer(world);
             if (a === null) return false;
-            const first = a.split("\n")[0].trim();
-            if (first === "bob") return true;
-            if (/^d/.test(first) && first.split(/\s+/)[2] === "bob") return true;
-            if (/Uid: \(\s*\d+\/\s*bob\)/.test(a)) return true;
+            if (shareOwnerAnswer(a, shell.cwd)) return true;
+            if (/^bob(?:\r?\n)/.test(a)) return "Имя верное, но в ответе есть лишние строки.";
             if (a.includes("alice"))
               return "alice — владелец файлов внутри: ls -l на каталог показывает его содержимое. Нужен сам каталог.";
             return "Не тот пользователь. Посмотри на сам каталог, а не на его содержимое.";
@@ -128,7 +158,12 @@ export const paths: Topic = guarded({
           hint: "ls -l на каталог показывает файлы в нём. Нужен ключ, который покажет сам каталог.",
           solution: "ls -ld /srv/share > /root/answer",
           accept: ["stat -c %U /srv/share > /root/answer", "stat /srv/share > /root/answer", "echo bob > /root/answer"],
-          reject: ["echo alice > /root/answer", "ls -l /srv/share > /root/answer"],
+          reject: [
+            "echo alice > /root/answer",
+            "ls -l /srv/share > /root/answer",
+            "printf 'bob\\nwrong owner also\\n' > /root/answer",
+            "stat /srv/share > /root/answer\necho alice >> /root/answer",
+          ],
           explain:
             "`ls -l /srv/share` выводит содержимое — там файлы alice. Сам каталог показывает `ls -ld` (или `stat`): его владелец bob. При Permission denied на создание файла важны права каталога, а не файлов в нём.",
         },
