@@ -1,5 +1,6 @@
 // Диски и монтирование: lsblk, blkid, df, du, mount, umount, findmnt, mkfs.*, swapon, free,
 // truncate, fallocate, dd и systemctl daemon-reload. Вывод — как в Rocky Linux 9.
+import { diskCommands } from "./disks";
 import { serviceAction } from "./services";
 import { defineCommand } from "just-bash";
 import type { Command, ExecResult } from "just-bash";
@@ -1465,7 +1466,7 @@ function fmtSecs(s: number): string {
 export function storageCommands(w: World, onUnsupported: (name: string) => void): Command[] {
   return [
     lsblkCommand(w), blkidCommand(w), dfCommand(w), duCommand(w), mountCommand(w), umountCommand(w), findmntCommand(w),
-    ...mkfsCommands(w), ...swapCommands(w, onUnsupported), systemctlStub(w, onUnsupported), ...fileCommands(w),
+    ...diskCommands(w), ...mkfsCommands(w), ...swapCommands(w, onUnsupported), systemctlStub(w, onUnsupported), ...fileCommands(w),
   ];
 }
 
